@@ -1,0 +1,52 @@
+{
+  "name": "bufout",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Buffed output of child processes, with spinners and prefixed lines",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "mocha",
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "lint": "eslint",
+    "example": "tsx ./src/test-utils/example.ts"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kraenhansen/bufout.git"
+  },
+  "keywords": [
+    "stdio",
+    "stdout",
+    "stderr",
+    "buffer",
+    "output",
+    "spinner",
+    "spinners",
+    "prefix"
+  ],
+  "author": "Kræn Hansen <mail@kraenhansen.dk>",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/kraenhansen/bufout/issues"
+  },
+  "homepage": "https://github.com/kraenhansen/bufout#readme",
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@tsconfig/node18": "18.2.4",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^18",
+    "eslint": "^9.15.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "mocha": "^10.8.2",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.2",
+    "typescript": "5.6.3",
+    "typescript-eslint": "^8.15.0"
+  }
+}
