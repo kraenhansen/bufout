@@ -39,8 +39,15 @@ const PATCHED = {
   stderr: createBufferedWriteable(),
 };
 
-function assertOutput(stream: "stdout" | "stderr", text: string) {
-  assert.equal(PATCHED[stream].drain(), text);
+function assertOutput(
+  stream: BufferedWriteable | "stdout" | "stderr",
+  text: string,
+) {
+  if (typeof stream === "string") {
+    assert.equal(PATCHED[stream].drain(), text);
+  } else {
+    assert.equal(stream.drain(), text);
+  }
 }
 
 function getTempFilePath() {
@@ -109,6 +116,25 @@ describe("spawn", () => {
         assertOutput("stderr", "failure\n");
       });
     });
+
+    it("use stdout and stderr passed through options", async () => {
+      const stdout = createBufferedWriteable();
+      const stderr = createBufferedWriteable();
+      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+        outputMode: "inherit",
+        stdout,
+        stderr,
+        env: {
+          ...process.env,
+          CONSOLE_LOG: "hi",
+          CONSOLE_ERROR: "failure",
+        },
+      });
+      assertOutput("stdout", "");
+      assertOutput("stderr", "");
+      assertOutput(stdout, "hi\n");
+      assertOutput(stderr, "failure\n");
+    });
   });
 
   describe("buffered output-mode", () => {
@@ -161,6 +187,27 @@ describe("spawn", () => {
       });
       assertOutput("stdout", "[prefix] starting\n");
       assertOutput("stderr", "[prefix] failed\n");
+    });
+
+    it("use stdout and stderr passed through options", async () => {
+      const stdout = createBufferedWriteable();
+      const stderr = createBufferedWriteable();
+      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+        outputMode: "buffered",
+        stdout,
+        stderr,
+        env: {
+          ...process.env,
+          CONSOLE_LOG: "hi",
+          CONSOLE_ERROR: "failure",
+        },
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        assertOutput("stdout", "");
+        assertOutput("stderr", "");
+        assertOutput(stdout, "hi\n");
+        assertOutput(stderr, "failure\n");
+      });
     });
   });
 

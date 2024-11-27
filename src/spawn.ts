@@ -38,7 +38,18 @@ type SpawnOptions = {
    * or are they buffered (initially detached from the UI) but flushable on failures.
    */
   outputMode?: OutputMode;
+  /**
+   * Add a prefix to all lines written to the output streams.
+   */
   outputPrefix?: string;
+  /**
+   * Use this when flushing output to stdout.
+   */
+  stdout?: Writable | typeof process.stdout;
+  /**
+   * Use this when flushing output to stderr.
+   */
+  stderr?: Writable | typeof process.stderr;
 } & cp.CommonSpawnOptions;
 
 type TransformedStdio = [
@@ -106,7 +117,13 @@ function transformStdio(
 export function spawn(
   command: string,
   args: string[],
-  { outputMode = "inherit", outputPrefix, ...options }: SpawnOptions = {},
+  {
+    outputMode = "inherit",
+    outputPrefix,
+    stdout = process.stdout,
+    stderr = process.stderr,
+    ...options
+  }: SpawnOptions = {},
 ): Promise<void> {
   const child = cp.spawn(command, args, {
     ...options,
@@ -119,7 +136,7 @@ export function spawn(
   process.once("SIGINT", interruptChild);
 
   // Bind and attach transformed and buffered outputs to process streams
-  const [stdin, stdout, stderr, flushOutput] = transformStdio(
+  const [stdin, childStdout, childStderr, flushOutput] = transformStdio(
     child,
     outputMode,
   );
@@ -127,11 +144,11 @@ export function spawn(
     stdin.pipe(process.stdin);
   }
   if (typeof outputPrefix === "string") {
-    stdout.pipe(createPrefixingTransform(outputPrefix)).pipe(process.stdout);
-    stderr.pipe(createPrefixingTransform(outputPrefix)).pipe(process.stderr);
+    childStdout.pipe(createPrefixingTransform(outputPrefix)).pipe(stdout);
+    childStderr.pipe(createPrefixingTransform(outputPrefix)).pipe(stderr);
   } else {
-    stdout.pipe(process.stdout);
-    stderr.pipe(process.stderr);
+    childStdout.pipe(stdout);
+    childStderr.pipe(stderr);
   }
 
   return new Promise((resolve, reject) => {
