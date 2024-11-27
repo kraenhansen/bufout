@@ -57,4 +57,9 @@ await spawn(
     throw error;
   }
 });
+
+// To manually kill the child process, call `kill` on the object returned from `spawn`:
+const sleeper = spawn("sleep", ["10"]);
+// If you get impatient
+sleeper.kill();
 ```

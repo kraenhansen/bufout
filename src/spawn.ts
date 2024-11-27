@@ -5,6 +5,13 @@ import { createMultiBufferedTransform } from "./MultiBufferedTransform.js";
 import { createPrefixingTransform } from "./PrefixingTransform.js";
 import { Readable, Writable } from "node:stream";
 
+export type KillablePromise<T> = Promise<T> & {
+  /**
+   * Kills the child process.
+   */
+  kill: ChildProcess["kill"];
+};
+
 export class SpawnFailure extends Error {
   constructor(
     public readonly command: string,
@@ -124,7 +131,7 @@ export function spawn(
     stderr = process.stderr,
     ...options
   }: SpawnOptions = {},
-): Promise<void> {
+): KillablePromise<void> {
   const child = cp.spawn(command, args, {
     ...options,
     stdio: "pipe",
@@ -151,7 +158,7 @@ export function spawn(
     childStderr.pipe(stderr);
   }
 
-  return new Promise((resolve, reject) => {
+  const result = new Promise<void>((resolve, reject) => {
     child.once("exit", (code, signal) => {
       // Flush or destroy buffers when child exits and remove process listeners
       process.off("exit", killChild);
@@ -164,5 +171,10 @@ export function spawn(
     });
     // Propagate errors
     child.once("error", reject);
-  });
+  }) as KillablePromise<void>;
+
+  // Propagate the kill method
+  result.kill = child.kill.bind(child);
+
+  return result;
 }

@@ -230,5 +230,13 @@ describe("spawn", () => {
       });
       assert.equal(fs.existsSync(tempPath), true);
     });
+
+    it("is killable", async () => {
+      const sleeper = spawn("sleep", ["10"]);
+      sleeper.kill();
+      await sleeper.catch((error) => {
+        assert(error instanceof SpawnFailure);
+      });
+    });
   });
 });
