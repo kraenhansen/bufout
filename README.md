@@ -36,6 +36,10 @@ await spawn(
     // while still applying any prefix.
     outputMode: "buffered",
 
+	  // Optionally pass the stdout and stderr streams used when flushing the buffer
+    // stdout: process.stdout,
+    // stderr: process.stderr,
+
     // Forwards extra options to the underlying call to node:child_process's spawn
     // shell: true,
     // timeout: 1000,
