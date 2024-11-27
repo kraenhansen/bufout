@@ -37,9 +37,9 @@ export class SpawnFailure extends Error {
   }
 }
 
-type OutputMode = "inherit" | "buffered";
+export type OutputMode = "inherit" | "buffered";
 
-type SpawnOptions = {
+export type SpawnOptions = {
   /**
    * Is the output buffers inherited, printing from the process right away
    * or are they buffered (initially detached from the UI) but flushable on failures.

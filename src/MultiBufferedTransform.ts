@@ -20,7 +20,7 @@ type MultiBufferedTransformResult<T extends Readable[]> = {
   outputs: T;
 };
 
-type MultiBufferedTransformOptions = {
+export type MultiBufferedTransformOptions = {
   /**
    * End the output when the input ends.
    * @default true
