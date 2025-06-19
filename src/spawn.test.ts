@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { Writable } from "node:stream";
+import { type Stream, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import fs from "node:fs";
 
@@ -53,6 +53,14 @@ function assertOutput(
 function getTempFilePath() {
   const tempDir = fs.mkdtempSync(`${tmpdir()}${path.sep}`);
   return path.join(tempDir, "temp.file");
+}
+
+function countListeners(stream: Stream) {
+  return Object.fromEntries(
+    stream
+      .eventNames()
+      .map((eventName) => [eventName, stream.listenerCount(eventName)]),
+  );
 }
 
 describe("BufferedWriteable util", () => {
@@ -164,9 +172,9 @@ describe("spawn", () => {
         assertOutput("stdout", "");
         assertOutput("stderr", "");
         error.flushOutput();
+        assertOutput("stdout", "starting\n");
+        assertOutput("stderr", "failed\n");
       });
-      assertOutput("stdout", "starting\n");
-      assertOutput("stderr", "failed\n");
     });
 
     it("doesn't print prefix, until flushed", async () => {
@@ -236,6 +244,30 @@ describe("spawn", () => {
       sleeper.kill();
       await sleeper.catch((error) => {
         assert(error instanceof SpawnFailure);
+      });
+    });
+  });
+
+  describe("listener hygiene", () => {
+    it("removes listeners on exit", async () => {
+      const stdout = createBufferedWriteable();
+      const stderr = createBufferedWriteable();
+      const listenersBefore = {
+        stdout: countListeners(stdout),
+        stderr: countListeners(stderr),
+      };
+      const result = spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+        outputMode: "buffered",
+        stdout,
+        stderr,
+      });
+      await result;
+      // End the streams
+      // await new Promise((resolve) => stdout.end(resolve));
+      // await new Promise((resolve) => stderr.end(resolve));
+      assert.deepEqual(listenersBefore, {
+        stdout: countListeners(stdout),
+        stderr: countListeners(stderr),
       });
     });
   });

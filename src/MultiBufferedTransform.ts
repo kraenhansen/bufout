@@ -5,7 +5,7 @@ type MultiBufferedTransformResult<T extends Readable[]> = {
    * Flush streams into their respective outputs
    * @param stream filter for a specific stream and drops chunks belonging to other streams.
    */
-  flush(stream?: Readable): void;
+  flush(only?: Readable): void;
   /**
    * Destroy all output streams.
    */

@@ -72,11 +72,15 @@ type TransformedStdio = [
   (stream?: "stdout" | "stderr" | "both") => void,
 ];
 
-function determineStream(stream: "stdout" | "stderr" | "both") {
+/**
+ * Determine the stream to filter on.
+ * Returns undefined in case of "both" avoid filtering at all.
+ */
+function determineStreamFilter(stream: "stdout" | "stderr" | "both") {
   if (stream === "stdout") {
     return process.stdout;
   } else if (stream === "stderr") {
-    return process.stdout;
+    return process.stderr;
   } else if (stream === "both") {
     return undefined;
   } else {
@@ -109,7 +113,7 @@ function transformStdio(
       null,
       ...transform.outputs,
       (stream: "stdout" | "stderr" | "both" = "both") => {
-        transform.flush(determineStream(stream));
+        transform.flush(determineStreamFilter(stream));
         transform.destroy();
       },
     ];
@@ -175,6 +179,24 @@ export function spawn(
 
   // Propagate the kill method
   result.kill = child.kill.bind(child);
+
+  // Cleanup listeners on completion
+  void result.finally(() => {
+    child.removeAllListeners("exit");
+    child.removeAllListeners("error");
+    // Stop piping the child streams to stdout and stderr
+    // childStdout.unpipe(stdout);
+    // childStderr.unpipe(stderr);
+    // TODO: Do this less agressively as the caller might have added listeners too
+    // stdout.removeAllListeners("close");
+    // stderr.removeAllListeners("close");
+    // stdout.removeAllListeners("error");
+    // stderr.removeAllListeners("error");
+    // stdout.removeAllListeners("finish");
+    // stderr.removeAllListeners("finish");
+    // stdout.removeAllListeners("unpipe");
+    // stderr.removeAllListeners("unpipe");
+  });
 
   return result;
 }
