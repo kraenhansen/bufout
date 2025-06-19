@@ -217,16 +217,16 @@ describe("spawn", () => {
       assert.equal(fs.existsSync(tempPath), false);
       await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "inherit",
-        timeout: 500,
+        timeout: 1000,
         env: {
           ...process.env,
-          SET_TIMEOUT_MS: "1000",
+          SET_TIMEOUT_MS: "2000",
           TOUCH_PATH_ON_EXIT: tempPath,
         },
       }).catch((error) => {
         assert(error instanceof SpawnFailure);
-        assert.equal(error.code, null);
         assert.equal(error.signal, "SIGTERM");
+        assert.equal(error.code, null);
       });
       assert.equal(fs.existsSync(tempPath), true);
     });
