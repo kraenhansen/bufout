@@ -97,7 +97,7 @@ function transformStdio(
       child.stdout,
       child.stderr,
       () => {
-        throw new Error("Switch to 'buffered' output mode to flush buffers");
+        // Nothing to flush
       },
     ];
   } else if (mode === "buffered") {
