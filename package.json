@@ -1,6 +1,6 @@
 {
   "name": "bufout",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "Buffed output of child processes, with spinners and prefixed lines",
   "main": "dist/index.js",
