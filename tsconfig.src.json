@@ -6,7 +6,13 @@
     "declarationMap": true,
     "sourceMap": true,
     "composite": true,
-    "types": ["node"]
+    "types": ["node"],
+    // Relative imports use ".ts" extensions, so Node.js can run the sources
+    // directly, and are rewritten to ".js" when emitting.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    // Node.js only strips types, it doesn't transform syntax such as enums
+    "erasableSyntaxOnly": true
   },
   "include": ["src"],
   "exclude": ["**/*.test.ts", "src/test-utils"]

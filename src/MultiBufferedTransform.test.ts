@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough, Readable } from "node:stream";
 
-import { createMultiBufferedTransform } from "./MultiBufferedTransform.js";
+import { createMultiBufferedTransform } from "./MultiBufferedTransform.ts";
 
 async function streamsToString(streams: Readable[]) {
   let output = "";

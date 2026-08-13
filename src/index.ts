@@ -1,3 +1,3 @@
-export * from "./MultiBufferedTransform.js";
-export * from "./PrefixingTransform.js";
-export * from "./spawn.js";
+export * from "./MultiBufferedTransform.ts";
+export * from "./PrefixingTransform.ts";
+export * from "./spawn.ts";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Readable, Writable } from "node:stream";
 
-import { createPrefixingTransform } from "./PrefixingTransform.js";
+import { createPrefixingTransform } from "./PrefixingTransform.ts";
 
 function testPrefixingTransform(
   chunks: string[],
