@@ -50,11 +50,11 @@ npm version patch                       # or minor / major
 
 The release has to point at a commit that is on `main`, and the version bump gets there the same way every other change does - through a pull request:
 
-1. Push the version commit to a branch and open a PR against `main`. Keep the version commit last on the branch, so the thing being released is the branch tip.
-2. Ask the user to merge it, **with a merge commit rather than a squash**. A squash rewrites the version commit into a new one, which costs you the SHA you were about to release and the tie between the tag and `npm version`'s commit.
-3. `git fetch origin main` and read back the SHA of the version commit on `origin/main`. That SHA is what the release targets.
+1. Push the version commit to a branch and open a PR against `main`.
+2. Get it merged. This repo allows **squash merges only** - merge commits and rebases are both turned off - so the branch arrives as a single new commit and `npm version`'s commit is rewritten. Expect that rather than fighting it, and don't promise the user a merge commit.
+3. `git fetch origin main` and read back the SHA of the squashed commit on `origin/main`. That SHA is what the release targets. It is a different commit than the one `npm version` made, which costs nothing: `package.json` at that commit carries the new version, and that is all the workflow compares the tag against.
 
-The local annotated tag from `npm version` is a by-product, not the artifact - it never has to reach `origin`, and the next step is what actually creates the tag there.
+So the local annotated tag from `npm version` is a by-product, not the artifact. It names a commit that no longer exists once the PR merges, it never has to reach `origin`, and the next step is what actually creates the tag there.
 
 ### Publishing the release
 
