@@ -5,6 +5,10 @@ through [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) (OI
 stored in the repository. Publishing this way also gets the package
 [provenance attestations](https://docs.npmjs.com/generating-provenance-statements/) for free.
 
+In Claude Code, the [`release` skill](./.claude/skills/release/SKILL.md) drives this flow and can do
+everything up to the approval, which needs a human with 2FA. Asking it to "cut a patch release" is
+enough to trigger it.
+
 ## Cutting a release
 
 From an up-to-date `main` with a clean working tree:
