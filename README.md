@@ -89,5 +89,5 @@ stored in the repository. Publishing this way also gets the package
 
 The trusted publisher on npm is configured for the `main` environment, so the workflow job runs in the
 GitHub `main` environment and must keep both its name and the `publish.yml` filename in sync with that
-configuration. Staged publishing needs npm >= 11.15.0 (trusted publishing alone needs >= 11.5.1), which
-is why the workflow updates npm before publishing.
+configuration. Approving a staged release locally needs npm >= 11.15.0 (trusted publishing alone needs
+>= 11.5.1) — recent Node 24 releases bundle a new enough npm.

@@ -35,12 +35,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
+          # Bundles npm >= 11.15.0, needed for trusted publishing and "npm stage publish"
           node-version: lts/krypton
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm >= 11.5.1 and staged publishing needs npm >= 11.15.0,
-      # which is newer than what Node ships with today.
-      - name: Update npm
-        run: npm install --global npm@latest
       - run: npm ci
       - run: npm run lint
       - run: npm run build
