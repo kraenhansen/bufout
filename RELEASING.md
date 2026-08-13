@@ -5,7 +5,10 @@ it, up to the approval that needs a human. What the pipeline assumes:
 
 - Publishing a **published GitHub release** is the only way a version reaches npm. Drafts trigger
   nothing, and there is no manual workflow dispatch.
-- The release tag is the `package.json` version prefixed with `v`. The
+- The version bump reaches `main` through a pull request, like every other change. Merge it with a
+  merge commit, not a squash, so the release can be created against `npm version`'s own commit.
+- The release creates the tag, targeting that commit — no tag is pushed by hand. The tag is the
+  `package.json` version prefixed with `v`, and the
   [Publish workflow](./.github/workflows/publish.yml) fails the release if they disagree.
 - Every release goes to the `latest` dist-tag, so pre-releases are rejected rather than becoming the
   version everybody installs.
