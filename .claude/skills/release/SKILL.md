@@ -28,7 +28,7 @@ Check that:
 - You are on `main` with a clean tree and in sync with `origin/main`. `npm version` refuses to run on a dirty tree, which is a feature - do not stash around it.
 - CI is green on the commit you are about to release (`gh run list --branch main --limit 3`). The publish workflow reruns lint, build, and tests anyway, so a broken commit just fails later and more expensively.
 
-The steps below go through `gh`, which is not installed in Claude Code web and remote sessions. Install it up front - `GH_TOKEN` is already in the environment, so it authenticates itself - rather than hand-rolling the equivalent REST calls with `curl` further down.
+The steps below go through `gh`, which is not installed in Claude Code web and remote sessions. Install it up front - `GH_TOKEN` is already in the environment, so it authenticates itself - rather than hand-rolling the equivalent REST calls with `curl` further down. Search the available GitHub tools for one that creates a release first, though - `gh` is the fallback for when there isn't one, not the preference.
 
 ## Cutting the release
 
