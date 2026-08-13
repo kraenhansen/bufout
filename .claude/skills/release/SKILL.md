@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new release of bufout - bump the version, push the tag, and create the GitHub release that triggers the publish workflow. Use this whenever the user wants to release, cut a release, ship a version, bump the version, or get changes out on npm, including phrasings like "let's do a patch release", "ship 0.4.0", "time to publish this", or "can you release what's on main". Also use it when a release seems stuck or never showed up on npm, since the last step is a manual approval that is easy to forget.
+description: Cut a new release of bufout - bump the version, get the commit onto main, and create the GitHub release that tags it and triggers the publish workflow. Use this whenever the user wants to release, cut a release, ship a version, bump the version, or get changes out on npm, including phrasings like "let's do a patch release", "ship 0.4.0", "time to publish this", or "can you release what's on main". Also use it when a release seems stuck or never showed up on npm, since the last step is a manual approval that is easy to forget.
 ---
 
 # Releasing bufout
@@ -13,20 +13,22 @@ repo is the source of truth - read `.github/workflows/publish.yml` and fix which
 Four things have to happen, and only the first three are yours:
 
 1. `npm version` bumps `package.json`, commits, and tags.
-2. The commit and tag are pushed to `main`.
-3. A **published** GitHub release on that tag triggers `.github/workflows/publish.yml`.
+2. That commit reaches `main` through a pull request, like every other change.
+3. A **published** GitHub release, created against that commit, tags it and triggers `.github/workflows/publish.yml`.
 4. The workflow authenticates to npm over OIDC (no token anywhere) and runs `npm stage publish`, which uploads the tarball to npm's stage queue. **It is not installable yet.** A maintainer promotes it by approving with 2FA.
 
 Step 4's approval is deliberately out of reach: npm refuses OIDC tokens for stage approval precisely so a human sees the release before the world does. Never try to work around it - your job ends by handing the maintainer the exact commands.
 
 ## Before touching anything
 
-Confirm the release with the user before pushing or creating anything. Pushing a version tag and publishing a release are outward-facing and awkward to undo - npm allows unpublishing a version for only 72 hours, and that version number is burned forever afterwards.
+Confirm the release with the user before opening or creating anything. Publishing a release is outward-facing and awkward to undo - npm allows unpublishing a version for only 72 hours, and that version number is burned forever afterwards.
 
 Check that:
 
 - You are on `main` with a clean tree and in sync with `origin/main`. `npm version` refuses to run on a dirty tree, which is a feature - do not stash around it.
 - CI is green on the commit you are about to release (`gh run list --branch main --limit 3`). The publish workflow reruns lint, build, and tests anyway, so a broken commit just fails later and more expensively.
+
+The steps below go through `gh`, which is not installed in Claude Code web and remote sessions. Install it up front - `GH_TOKEN` is already in the environment, so it authenticates itself - rather than hand-rolling the equivalent REST calls with `curl` further down. Search the available GitHub tools for one that creates a release first, though - `gh` is the fallback for when there isn't one, not the preference.
 
 ## Cutting the release
 
@@ -40,21 +42,34 @@ Breaking API changes are a major, new exported behaviour is a minor, everything 
 
 ```sh
 npm version patch                       # or minor / major
-git push origin main --follow-tags
 ```
 
-`npm version` writes the commit message as the bare version (`0.3.3`) and creates an annotated tag (`v0.3.3`). That matches this repo's existing history, so don't hand-roll the commit or add a prefix. `--follow-tags` pushes the annotated tag along with the commit; without it the tag stays local and the release creation fails.
+`npm version` writes the commit message as the bare version (`0.3.3`) and creates an annotated tag (`v0.3.3`). That matches this repo's existing history, so don't hand-roll the commit or add a prefix.
 
-Then publish the release, which is what actually triggers the workflow:
+### Getting the version commit onto `main`
+
+The release has to point at a commit that is on `main`, and the version bump gets there the same way every other change does - through a pull request:
+
+1. Push the version commit to a branch and open a PR against `main`.
+2. Get it merged. This repo allows **squash merges only** - merge commits and rebases are both turned off - so the branch arrives as a single new commit and `npm version`'s commit is rewritten. Expect that rather than fighting it, and don't promise the user a merge commit.
+3. `git fetch origin main` and read back the SHA of the squashed commit on `origin/main`. That SHA is what the release targets. It is a different commit than the one `npm version` made, which costs nothing: `package.json` at that commit carries the new version, and that is all the workflow compares the tag against.
+
+So the local annotated tag from `npm version` is a by-product, not the artifact. It names a commit that no longer exists once the PR merges, it never has to reach `origin`, and the next step is what actually creates the tag there.
+
+### Publishing the release
+
+Publishing the release is what triggers the workflow, and it is also what creates the tag. Both `gh release create` and `POST /repos/{owner}/{repo}/releases` create `tag_name` themselves when it does not exist on the remote, pointing it at the target commit - so there is never a tag to push by hand.
 
 ```sh
-gh release create v0.3.3 --verify-tag --generate-notes
+gh release create v0.3.3 --target <sha> --generate-notes --notes-start-tag v0.3.2
 ```
 
-- `--verify-tag` makes a typo fail loudly instead of creating a release on a brand-new tag pointing somewhere unintended.
-- There are no releases in this repo yet, so the first `--generate-notes` reaches back to the beginning of history. Narrow it with `--notes-start-tag v0.3.2`.
+- Pass `--target` as the **exact SHA** of the version commit, never a branch name. A branch name resolves at creation time, so a push racing you would tag the wrong commit. Pinning the SHA is what guards against tagging something unintended; `--verify-tag` cannot help here, since it requires the tag to already exist and creating it is this step's job.
+- `--generate-notes` with no start tag reaches back to the beginning of history. Narrow it with `--notes-start-tag` set to the previous release's tag.
 - **Do not use `--draft`.** Drafts fire no event, so nothing publishes until the draft is published.
 - **Do not mark it as a pre-release**, and don't bump to a pre-release version. This package publishes only to the `latest` dist-tag, so a `0.4.0-rc.0` would become the version every consumer installs. The workflow refuses both rather than letting that happen quietly.
+
+If creating the release is denied, stop and hand the user that exact `gh release create` line - do not go looking for another way to reach the registry.
 
 ## Confirming and handing off
 
