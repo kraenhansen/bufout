@@ -189,6 +189,23 @@ describe("spawn", () => {
       assertOutput("stderr", "[prefix] failed\n");
     });
 
+    it("flushes only the selected stream", async () => {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
+        outputMode: "buffered",
+        env: {
+          ...process.env,
+          CONSOLE_LOG: "starting",
+          CONSOLE_ERROR: "failed",
+          EXIT_CODE: "1",
+        },
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput("stderr");
+      });
+      assertOutput("stdout", "");
+      assertOutput("stderr", "failed\n");
+    });
+
     it("use stdout and stderr passed through options", async () => {
       const stdout = createBufferedWriteable();
       const stderr = createBufferedWriteable();
@@ -211,18 +228,26 @@ describe("spawn", () => {
     });
   });
 
-  describe("hanging process", () => {
+  describe("hanging process", function () {
+    // Spawning takes a while and the child is killed by a timeout
+    this.timeout(20_000);
+
     it("can timeout", async () => {
       const tempPath = getTempFilePath();
       assert.equal(fs.existsSync(tempPath), false);
-      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
+      // Hangs until killed by the timeout, then touches the file upon SIGTERM and
+      // re-raises the signal to die from it (making the child exit by the signal,
+      // deterministically, instead of exiting normally from its own handler).
+      const hangingScript = `
+        setTimeout(() => {}, 30000);
+        process.once("SIGTERM", () => {
+          require("node:fs").writeFileSync(${JSON.stringify(tempPath)}, "SIGTERM");
+          process.kill(process.pid, "SIGTERM");
+        });
+      `;
+      await spawn(process.execPath, ["-e", hangingScript], {
         outputMode: "inherit",
         timeout: 1000,
-        env: {
-          ...process.env,
-          SET_TIMEOUT_MS: "2000",
-          TOUCH_PATH_ON_EXIT: tempPath,
-        },
       }).catch((error) => {
         assert(error instanceof SpawnFailure);
         assert.equal(error.signal, "SIGTERM");
@@ -236,6 +261,154 @@ describe("spawn", () => {
       sleeper.kill();
       await sleeper.catch((error) => {
         assert(error instanceof SpawnFailure);
+      });
+    });
+  });
+
+  describe("listener hygiene", function () {
+    // Spawning takes a while and some tests spawn sequentially
+    this.timeout(20_000);
+
+    // Enough to exceed the default limit of 10 listeners, should listeners leak per spawn
+    const SPAWN_COUNT = 12;
+    // Prints to both stdout and stderr to exercise the output plumbing
+    const PRINTING_SCRIPT = "console.log('out'); console.error('err');";
+
+    function getListenerCounts(emitter: NodeJS.EventEmitter) {
+      const result: Record<string, number> = {};
+      for (const event of emitter.eventNames()) {
+        result[String(event)] = emitter.listenerCount(event);
+      }
+      return result;
+    }
+
+    /**
+     * Run an async action a number of times in sequence.
+     */
+    async function repeat(
+      count: number,
+      action: (index: number) => Promise<void>,
+    ) {
+      for (const index of Array(count).keys()) {
+        await action(index);
+      }
+    }
+
+    /**
+     * Asserts that running the action neither grows the number of listeners on the
+     * process and its stdio streams, nor emits a MaxListenersExceededWarning.
+     */
+    async function assertListenerHygiene(action: () => Promise<void>) {
+      // Touch process.stdin: it's instantiated lazily on first access and needs
+      // a tick to settle its internal one-time construction listener
+      assert(process.stdin, "Expected process.stdin");
+      // Warm up: the first spawn towards a destination attaches a small constant
+      // number of listeners to it, shared by all subsequent spawns
+      await spawn(process.execPath, ["-e", ""], { outputMode: "inherit" });
+
+      const warnings: Error[] = [];
+      const captureWarning = (warning: Error) => {
+        if (warning.name === "MaxListenersExceededWarning") {
+          warnings.push(warning);
+        }
+      };
+      process.on("warning", captureWarning);
+      try {
+        const emitters: [string, NodeJS.EventEmitter][] = [
+          ["process", process],
+          ["process.stdout", process.stdout],
+          ["process.stderr", process.stderr],
+          ["process.stdin", process.stdin],
+        ];
+        const baselines = emitters.map(
+          ([name, emitter]) =>
+            [name, emitter, getListenerCounts(emitter)] as const,
+        );
+        await action();
+        // Warnings are emitted asynchronously
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(warnings, []);
+        for (const [name, emitter, baseline] of baselines) {
+          assert.deepEqual(
+            getListenerCounts(emitter),
+            baseline,
+            `Expected listeners on ${name} to return to their baseline`,
+          );
+        }
+      } finally {
+        process.off("warning", captureWarning);
+      }
+    }
+
+    for (const outputMode of ["inherit", "buffered"] as const) {
+      describe(`${outputMode} output-mode`, () => {
+        it("doesn't leak listeners on sequential spawns", async () => {
+          await assertListenerHygiene(async () => {
+            await repeat(SPAWN_COUNT, async (i) => {
+              await spawn(process.execPath, ["-e", PRINTING_SCRIPT], {
+                outputMode,
+                outputPrefix: i % 2 === 0 ? "[prefix] " : undefined,
+              });
+            });
+          });
+        });
+
+        it("doesn't leak listeners on concurrent spawns", async () => {
+          await assertListenerHygiene(async () => {
+            await Promise.all(
+              Array.from({ length: SPAWN_COUNT }, (_, i) =>
+                spawn(process.execPath, ["-e", PRINTING_SCRIPT], {
+                  outputMode,
+                  outputPrefix: i % 2 === 0 ? "[prefix] " : undefined,
+                }),
+              ),
+            );
+          });
+        });
+
+        it("doesn't leak listeners when spawning fails", async () => {
+          await assertListenerHygiene(async () => {
+            await repeat(SPAWN_COUNT, () =>
+              assert.rejects(
+                spawn("this-command-does-not-exist", [], { outputMode }),
+                /ENOENT/,
+              ),
+            );
+          });
+        });
+      });
+    }
+
+    it("doesn't leak listeners when failures are never flushed", async () => {
+      await assertListenerHygiene(async () => {
+        await repeat(SPAWN_COUNT, () =>
+          assert.rejects(
+            spawn(
+              process.execPath,
+              ["-e", PRINTING_SCRIPT + " process.exit(1);"],
+              { outputMode: "buffered" },
+            ),
+            SpawnFailure,
+          ),
+        );
+      });
+    });
+
+    it("doesn't leak listeners when failures are flushed", async () => {
+      await assertListenerHygiene(async () => {
+        await repeat(SPAWN_COUNT, () =>
+          spawn(
+            process.execPath,
+            ["-e", PRINTING_SCRIPT + " process.exit(1);"],
+            { outputMode: "buffered", outputPrefix: "[prefix] " },
+          ).catch((error) => {
+            assert(error instanceof SpawnFailure);
+            error.flushOutput();
+          }),
+        );
+        // Sanity check that flushing actually wrote through to the output
+        assert.notEqual(PATCHED.stdout.drain(), "");
+        assert.notEqual(PATCHED.stderr.drain(), "");
       });
     });
   });

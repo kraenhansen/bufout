@@ -3,7 +3,7 @@ import cp, { ChildProcess } from "node:child_process";
 
 import { createMultiBufferedTransform } from "./MultiBufferedTransform.ts";
 import { createPrefixingTransform } from "./PrefixingTransform.ts";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 
 export type KillablePromise<T> = Promise<T> & {
   /**
@@ -70,62 +70,176 @@ export type SpawnOptions = {
   stderr?: Writable | typeof process.stderr;
 } & cp.CommonSpawnOptions;
 
-type TransformedStdio = [
-  /** stdin */
-  Writable | null,
-  /** stdout */
-  Readable,
-  /** stderr */
-  Readable,
-  /**
-   * Flush and destroy output streams
-   */
-  (stream?: "stdout" | "stderr" | "both") => void,
-];
+/**
+ * Children which are currently running, tracked in a set per process event:
+ * a single shared listener is attached exactly while its set is non-empty,
+ * keeping the number of listeners on the process constant,
+ * regardless of the number of concurrently spawned children.
+ */
+const childrenToKill = new Set<ChildProcess>();
+const childrenToInterrupt = new Set<ChildProcess>();
 
-function determineStream(stream: "stdout" | "stderr" | "both") {
+/**
+ * Kill all running children, called as the process exits.
+ */
+function killChildren() {
+  for (const child of childrenToKill) {
+    child.kill();
+  }
+  childrenToKill.clear();
+}
+
+/**
+ * Interrupt all running children, called as the process gets interrupted.
+ * Clears the set as the "once" listener just detached itself:
+ * children spawned afterwards attach a fresh listener.
+ */
+function interruptChildren() {
+  for (const child of childrenToInterrupt) {
+    child.kill("SIGINT");
+  }
+  childrenToInterrupt.clear();
+}
+
+/**
+ * Register the child to be killed if the main process exits and interrupted on SIGINT.
+ */
+function registerChild(child: ChildProcess) {
+  if (childrenToKill.size === 0) {
+    process.once("exit", killChildren);
+  }
+  childrenToKill.add(child);
+  if (childrenToInterrupt.size === 0) {
+    process.once("SIGINT", interruptChildren);
+  }
+  childrenToInterrupt.add(child);
+}
+
+function unregisterChild(child: ChildProcess) {
+  childrenToKill.delete(child);
+  if (childrenToKill.size === 0) {
+    process.off("exit", killChildren);
+  }
+  childrenToInterrupt.delete(child);
+  if (childrenToInterrupt.size === 0) {
+    process.off("SIGINT", interruptChildren);
+  }
+}
+
+/**
+ * Pass-through streams piped into destinations, shared across all spawned children:
+ * Piping every child directly into a shared destination (such as process.stdout) adds
+ * listeners to the destination per active child, eventually exceeding its max listeners.
+ * Instead each destination gets a single persistent pass-through (with the listener
+ * limit disabled) shared by every child piping into the destination.
+ */
+const sharedDestinations = new WeakMap<Writable, PassThrough>();
+
+function getSharedDestination(destination: Writable) {
+  const existing = sharedDestinations.get(destination);
+  if (existing) {
+    return existing;
+  }
+  const shared = new PassThrough();
+  // Every active child piped into the shared pass-through adds a few listeners to it
+  shared.setMaxListeners(0);
+  shared.pipe(destination, { end: false });
+  sharedDestinations.set(destination, shared);
+  return shared;
+}
+
+/**
+ * Pipe a child output stream into a destination (via its shared pass-through),
+ * optionally applying a prefix. The pipes detach themselves once the source ends.
+ */
+function pipeOutput(
+  source: Readable,
+  destination: Writable,
+  prefix: string | undefined,
+) {
+  const shared = getSharedDestination(destination);
+  if (typeof prefix === "string") {
+    source.pipe(createPrefixingTransform(prefix)).pipe(shared, { end: false });
+  } else {
+    source.pipe(shared, { end: false });
+  }
+}
+
+/**
+ * Write everything pushed to the source into the destination, optionally applying
+ * a prefix. Used when flushing buffered output: chunks are forwarded synchronously
+ * and no listeners are ever added to the destination.
+ */
+function forwardOutput(
+  source: Readable,
+  destination: Writable,
+  prefix: string | undefined,
+) {
+  if (typeof prefix === "string") {
+    const prefixing = createPrefixingTransform(prefix);
+    prefixing.on("data", (chunk: Buffer) => destination.write(chunk));
+    source.on("data", (chunk: Buffer) => prefixing.write(chunk));
+  } else {
+    source.on("data", (chunk: Buffer) => destination.write(chunk));
+  }
+}
+
+/**
+ * Pipe both of the child's output streams into their destinations right away.
+ * Returns a no-op flush, as nothing gets buffered.
+ */
+function inheritOutput(
+  childStdout: Readable,
+  childStderr: Readable,
+  stdout: Writable,
+  stderr: Writable,
+  prefix: string | undefined,
+): (stream?: "stdout" | "stderr" | "both") => void {
+  pipeOutput(childStdout, stdout, prefix);
+  pipeOutput(childStderr, stderr, prefix);
+  return () => {
+    // Nothing to flush
+  };
+}
+
+/**
+ * Buffer the output instead of piping the child into the destinations.
+ * Returns a flush which forwards the buffer directly into the destinations,
+ * adding no listeners to them.
+ */
+function bufferOutput(
+  childStdout: Readable,
+  childStderr: Readable,
+  stdout: Writable,
+  stderr: Writable,
+  prefix: string | undefined,
+): (stream?: "stdout" | "stderr" | "both") => void {
+  const transform = createMultiBufferedTransform(
+    [childStdout, childStderr] as const,
+    { end: false },
+  );
+  const [stdoutOutput, stderrOutput] = transform.outputs;
+  return (stream = "both") => {
+    forwardOutput(stdoutOutput, stdout, prefix);
+    forwardOutput(stderrOutput, stderr, prefix);
+    transform.flush(determineStream(stream, childStdout, childStderr));
+    transform.destroy();
+  };
+}
+
+function determineStream(
+  stream: "stdout" | "stderr" | "both",
+  stdout: Readable,
+  stderr: Readable,
+) {
   if (stream === "stdout") {
-    return process.stdout;
+    return stdout;
   } else if (stream === "stderr") {
-    return process.stdout;
+    return stderr;
   } else if (stream === "both") {
     return undefined;
   } else {
     throw new Error(`Unexpected stream '${stream as string}'`);
-  }
-}
-
-function transformStdio(
-  child: ChildProcess,
-  mode: OutputMode,
-): TransformedStdio {
-  assert(child.stdin, "Expected child to have stdin");
-  assert(child.stdout, "Expected child to have stdout");
-  assert(child.stderr, "Expected child to have stderr");
-  if (mode === "inherit") {
-    return [
-      child.stdin,
-      child.stdout,
-      child.stderr,
-      () => {
-        // Nothing to flush
-      },
-    ];
-  } else if (mode === "buffered") {
-    const transform = createMultiBufferedTransform(
-      [child.stdout, child.stderr] as const,
-      { end: false },
-    );
-    return [
-      null,
-      ...transform.outputs,
-      (stream: "stdout" | "stderr" | "both" = "both") => {
-        transform.flush(determineStream(stream));
-        transform.destroy();
-      },
-    ];
-  } else {
-    throw new Error(`Unexpected output mode ${mode as string}`);
   }
 }
 
@@ -143,45 +257,40 @@ export function spawn(
     ...options
   }: SpawnOptions = {},
 ): KillablePromise<void> {
+  if (outputMode !== "inherit" && outputMode !== "buffered") {
+    throw new Error(`Unexpected output mode ${outputMode as string}`);
+  }
   const child = cp.spawn(command, args, {
     ...options,
     stdio: "pipe",
   });
-  // Exit child process if main process exits
-  const killChild = () => child.kill();
-  const interruptChild = () => child.kill("SIGINT");
-  process.once("exit", killChild);
-  process.once("SIGINT", interruptChild);
+  const { stdout: childStdout, stderr: childStderr } = child;
+  assert(childStdout, "Expected child to have stdout");
+  assert(childStderr, "Expected child to have stderr");
+  // Kill the child process if the main process exits or gets interrupted
+  registerChild(child);
 
-  // Bind and attach transformed and buffered outputs to process streams
-  const [stdin, childStdout, childStderr, flushOutput] = transformStdio(
-    child,
-    outputMode,
-  );
-  if (stdin) {
-    stdin.pipe(process.stdin);
-  }
-  if (typeof outputPrefix === "string") {
-    childStdout.pipe(createPrefixingTransform(outputPrefix)).pipe(stdout);
-    childStderr.pipe(createPrefixingTransform(outputPrefix)).pipe(stderr);
-  } else {
-    childStdout.pipe(stdout);
-    childStderr.pipe(stderr);
-  }
+  // Bind transformed and buffered outputs to the destination streams
+  const flushOutput =
+    outputMode === "inherit"
+      ? inheritOutput(childStdout, childStderr, stdout, stderr, outputPrefix)
+      : bufferOutput(childStdout, childStderr, stdout, stderr, outputPrefix);
 
   const result = new Promise<void>((resolve, reject) => {
     child.once("exit", (code, signal) => {
-      // Flush or destroy buffers when child exits and remove process listeners
-      process.off("exit", killChild);
-      process.off("SIGINT", interruptChild);
+      // The child can no longer be killed, nor react to an interrupt
+      unregisterChild(child);
       if (code === 0 && signal === null) {
         resolve();
       } else {
         reject(new SpawnFailure(command, args, code, signal, flushOutput));
       }
     });
-    // Propagate errors
-    child.once("error", reject);
+    // Propagate errors (a child failing to spawn emits "error" but never "exit")
+    child.once("error", (error) => {
+      unregisterChild(child);
+      reject(error);
+    });
   }) as KillablePromise<void>;
 
   // Propagate the kill method
