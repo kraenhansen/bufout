@@ -78,8 +78,9 @@ stored in the repository. Publishing this way also gets the package
    gh release create v0.3.3 --generate-notes
    ```
 
-   The tag has to be the package version prefixed with `v`, or the workflow fails the release.
-   Marking it as a pre-release publishes it under the `next` dist-tag instead of `latest`.
+   The tag has to be the package version prefixed with `v`, or the workflow fails the release. Every
+   release goes to the `latest` dist-tag, so the workflow rejects pre-releases rather than letting one
+   become the version everybody installs.
 3. Publishing the release runs the workflow, which
    [stages](https://docs.npmjs.com/cli/v11/commands/npm-stage/) the tarball: it is uploaded to npm but
    not installable yet. Promote it by approving it with 2FA — either from the package page on npmjs.com

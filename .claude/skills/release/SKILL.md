@@ -51,7 +51,7 @@ gh release create v0.3.3 --verify-tag --generate-notes
 - `--verify-tag` makes a typo fail loudly instead of creating a release on a brand-new tag pointing somewhere unintended.
 - There are no releases in this repo yet, so the first `--generate-notes` reaches back to the beginning of history. Narrow it with `--notes-start-tag v0.3.2`.
 - **Do not use `--draft`.** Drafts fire no event, so nothing publishes until the draft is published.
-- For a pre-release, bump with `npm version prerelease --preid=rc` and add `--prerelease` to the release. The workflow reads that flag and publishes under the `next` dist-tag so `latest` doesn't move.
+- **Do not mark it as a pre-release**, and don't bump to a pre-release version. This package publishes only to the `latest` dist-tag, so a `0.4.0-rc.0` would become the version every consumer installs. The workflow refuses both rather than letting that happen quietly.
 
 ## Confirming and handing off
 

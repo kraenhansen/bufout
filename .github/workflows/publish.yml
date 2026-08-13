@@ -35,14 +35,19 @@ jobs:
       - name: Resolve release
         id: release
         env:
-          # Pre-releases go out under "next" to avoid moving the "latest" dist-tag
-          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
           TAG_NAME: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           NAME="$(node --print 'require("./package.json").name')"
           VERSION="$(node --print 'require("./package.json").version')"
           if [ "$TAG_NAME" != "v$VERSION" ]; then
             echo "::error::Release tag $TAG_NAME does not match the package version $VERSION"
+            exit 1
+          fi
+          # Everything published here becomes the "latest" dist-tag, so refuse anything
+          # pre-release shaped rather than quietly pointing "latest" at it.
+          if [ "$PRERELEASE" = "true" ] || [ "$VERSION" != "${VERSION%%-*}" ]; then
+            echo "::error::Pre-releases are not supported - $VERSION would still become the latest version"
             exit 1
           fi
           if npm view "$NAME@$VERSION" version --silent > /dev/null 2>&1; then
@@ -52,24 +57,21 @@ jobs:
           {
             echo "name=$NAME"
             echo "version=$VERSION"
-            echo "dist-tag=$DIST_TAG"
           } >> "$GITHUB_OUTPUT"
       # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment and exchanges the token
       # itself. Provenance is generated automatically when publishing via OIDC, but passing
       # --provenance makes it explicit (and fails the job loudly if it ever cannot be generated).
       # Staging leaves the release uninstallable until a maintainer approves it with 2FA.
+      # No --tag: the default "latest" is the only channel this package publishes to.
       - name: Stage publish
-        env:
-          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
-        run: npm stage publish --provenance --tag "$DIST_TAG"
+        run: npm stage publish --provenance
       - name: Summarize
         env:
           NAME: ${{ steps.release.outputs.name }}
           VERSION: ${{ steps.release.outputs.version }}
-          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
         run: |
           {
-            echo "### Staged \`$NAME@$VERSION\` (\`$DIST_TAG\`) :package:"
+            echo "### Staged \`$NAME@$VERSION\` :package:"
             echo
             echo "It is not installable yet. Approve it with 2FA to promote it to the registry:"
             echo
