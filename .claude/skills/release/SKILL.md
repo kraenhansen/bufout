@@ -5,6 +5,9 @@ description: Cut a new release of bufout - bump the version, push the tag, and c
 
 # Releasing bufout
 
+[RELEASING.md](../../../RELEASING.md) documents this same flow for humans. If the two ever disagree, the
+repo is the source of truth - read `.github/workflows/publish.yml` and fix whichever is stale.
+
 ## How a release reaches npm
 
 Four things have to happen, and only the first three are yours:
