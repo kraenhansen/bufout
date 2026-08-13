@@ -71,55 +71,56 @@ export type SpawnOptions = {
 } & cp.CommonSpawnOptions;
 
 /**
- * Children which are currently running.
- * These are killed by a single shared pair of "exit" and "SIGINT" listeners,
+ * Children which are currently running, tracked in a set per process event:
+ * a single shared listener is attached exactly while its set is non-empty,
  * keeping the number of listeners on the process constant,
  * regardless of the number of concurrently spawned children.
  */
-const activeChildren = new Set<ChildProcess>();
-let killListenerAttached = false;
-let interruptListenerAttached = false;
+const childrenToKill = new Set<ChildProcess>();
+const childrenToInterrupt = new Set<ChildProcess>();
 
-function killActiveChildren() {
-  killListenerAttached = false;
-  for (const child of activeChildren) {
+/**
+ * Kill all running children, called as the process exits.
+ */
+function killChildren() {
+  for (const child of childrenToKill) {
     child.kill();
   }
+  childrenToKill.clear();
 }
 
-function interruptActiveChildren() {
-  interruptListenerAttached = false;
-  for (const child of activeChildren) {
+/**
+ * Interrupt all running children, called as the process gets interrupted.
+ * Clears the set as the "once" listener just detached itself:
+ * children spawned afterwards attach a fresh listener.
+ */
+function interruptChildren() {
+  for (const child of childrenToInterrupt) {
     child.kill("SIGINT");
   }
+  childrenToInterrupt.clear();
 }
 
 /**
  * Register the child to be killed if the main process exits and interrupted on SIGINT.
  */
 function registerChild(child: ChildProcess) {
-  activeChildren.add(child);
-  if (!killListenerAttached) {
-    killListenerAttached = true;
-    process.once("exit", killActiveChildren);
+  if (childrenToKill.size === 0) {
+    process.once("exit", killChildren);
   }
-  if (!interruptListenerAttached) {
-    interruptListenerAttached = true;
-    process.once("SIGINT", interruptActiveChildren);
+  childrenToKill.add(child);
+  if (childrenToInterrupt.size === 0) {
+    process.once("SIGINT", interruptChildren);
   }
+  childrenToInterrupt.add(child);
 }
 
 function unregisterChild(child: ChildProcess) {
-  activeChildren.delete(child);
-  if (activeChildren.size === 0) {
-    if (killListenerAttached) {
-      killListenerAttached = false;
-      process.off("exit", killActiveChildren);
-    }
-    if (interruptListenerAttached) {
-      interruptListenerAttached = false;
-      process.off("SIGINT", interruptActiveChildren);
-    }
+  if (childrenToKill.delete(child) && childrenToKill.size === 0) {
+    process.off("exit", killChildren);
+  }
+  if (childrenToInterrupt.delete(child) && childrenToInterrupt.size === 0) {
+    process.off("SIGINT", interruptChildren);
   }
 }
 
