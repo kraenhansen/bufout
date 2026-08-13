@@ -116,10 +116,12 @@ function registerChild(child: ChildProcess) {
 }
 
 function unregisterChild(child: ChildProcess) {
-  if (childrenToKill.delete(child) && childrenToKill.size === 0) {
+  childrenToKill.delete(child);
+  if (childrenToKill.size === 0) {
     process.off("exit", killChildren);
   }
-  if (childrenToInterrupt.delete(child) && childrenToInterrupt.size === 0) {
+  childrenToInterrupt.delete(child);
+  if (childrenToInterrupt.size === 0) {
     process.off("SIGINT", interruptChildren);
   }
 }
