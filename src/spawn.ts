@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import cp, { ChildProcess } from "node:child_process";
 
-import { createMultiBufferedTransform } from "./MultiBufferedTransform.js";
-import { createPrefixingTransform } from "./PrefixingTransform.js";
+import { createMultiBufferedTransform } from "./MultiBufferedTransform.ts";
+import { createPrefixingTransform } from "./PrefixingTransform.ts";
 import { Readable, Writable } from "node:stream";
 
 export type KillablePromise<T> = Promise<T> & {
@@ -13,18 +13,29 @@ export type KillablePromise<T> = Promise<T> & {
 };
 
 export class SpawnFailure extends Error {
+  readonly command: string;
+  readonly args: string[];
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly #flush: (stream?: "stdout" | "stderr" | "both") => void;
+
   constructor(
-    public readonly command: string,
-    public readonly args: string[],
-    public readonly code: number | null,
-    public readonly signal: NodeJS.Signals | null,
-    private readonly flush: (stream?: "stdout" | "stderr" | "both") => void,
+    command: string,
+    args: string[],
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    flush: (stream?: "stdout" | "stderr" | "both") => void,
   ) {
     super(
       `Running '${command}' failed` +
         (code !== null ? ` (code = ${code})` : "") +
         (signal !== null ? ` (signal = ${signal})` : ""),
     );
+    this.command = command;
+    this.args = args;
+    this.code = code;
+    this.signal = signal;
+    this.#flush = flush;
   }
 
   /**
@@ -33,7 +44,7 @@ export class SpawnFailure extends Error {
    * @param [stream="both"] Optionally, flush chunks from only one stream (dropping others)
    */
   flushOutput(stream: "stdout" | "stderr" | "both" = "both") {
-    this.flush(stream);
+    this.#flush(stream);
   }
 }
 

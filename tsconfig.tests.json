@@ -3,7 +3,9 @@
   "compilerOptions": {
     "composite": true,
     "types": ["node", "mocha"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
   },
   "include": ["src/**/*.test.ts", "src/test-utils"],
   "exclude": [],

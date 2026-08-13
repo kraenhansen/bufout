@@ -4,7 +4,7 @@ import { Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import fs from "node:fs";
 
-import { SpawnFailure, spawn } from "./spawn.js";
+import { SpawnFailure, spawn } from "./spawn.ts";
 
 const TEST_UTILS_DIR = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -87,7 +87,7 @@ describe("spawn", () => {
 
   describe("inherit output-mode", () => {
     it("inherits stdio", async () => {
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "inherit",
         env: {
           ...process.env,
@@ -99,7 +99,7 @@ describe("spawn", () => {
     });
 
     it("throws on failure", async () => {
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "inherit",
         env: {
           ...process.env,
@@ -110,8 +110,8 @@ describe("spawn", () => {
         assert(error instanceof SpawnFailure);
         assert.equal(error.code, 123);
         assert.equal(error.signal, null);
-        assert.equal(error.command, "npx");
-        assert.deepEqual(error.args, ["tsx", INSTRUMENTED_SCRIPT_PATH]);
+        assert.equal(error.command, process.execPath);
+        assert.deepEqual(error.args, [INSTRUMENTED_SCRIPT_PATH]);
         assertOutput("stdout", "");
         assertOutput("stderr", "failure\n");
       });
@@ -120,7 +120,7 @@ describe("spawn", () => {
     it("use stdout and stderr passed through options", async () => {
       const stdout = createBufferedWriteable();
       const stderr = createBufferedWriteable();
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "inherit",
         stdout,
         stderr,
@@ -139,7 +139,7 @@ describe("spawn", () => {
 
   describe("buffered output-mode", () => {
     it("doesn't print on success", async () => {
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "buffered",
         env: {
           ...process.env,
@@ -151,7 +151,7 @@ describe("spawn", () => {
     });
 
     it("doesn't print on failure, until flushed", async () => {
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "buffered",
         env: {
           ...process.env,
@@ -170,7 +170,7 @@ describe("spawn", () => {
     });
 
     it("doesn't print prefix, until flushed", async () => {
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "buffered",
         outputPrefix: "[prefix] ",
         env: {
@@ -192,7 +192,7 @@ describe("spawn", () => {
     it("use stdout and stderr passed through options", async () => {
       const stdout = createBufferedWriteable();
       const stderr = createBufferedWriteable();
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "buffered",
         stdout,
         stderr,
@@ -215,7 +215,7 @@ describe("spawn", () => {
     it("can timeout", async () => {
       const tempPath = getTempFilePath();
       assert.equal(fs.existsSync(tempPath), false);
-      await spawn("npx", ["tsx", INSTRUMENTED_SCRIPT_PATH], {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
         outputMode: "inherit",
         timeout: 1000,
         env: {

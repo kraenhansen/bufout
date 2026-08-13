@@ -1,4 +1,4 @@
-import { SpawnFailure, spawn } from "../spawn.js";
+import { SpawnFailure, spawn } from "../spawn.ts";
 
 console.log("Spawning: 'echo inherits output' with no buffering\n");
 

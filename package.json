@@ -9,7 +9,7 @@
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "lint": "eslint",
-    "example": "tsx ./src/test-utils/example.ts"
+    "example": "node ./src/test-utils/example.ts"
   },
   "files": [
     "dist",
@@ -45,8 +45,7 @@
     "eslint-plugin-prettier": "^5.2.1",
     "mocha": "^10.8.2",
     "prettier": "^3.3.3",
-    "tsx": "^4.19.2",
-    "typescript": "5.6.3",
+    "typescript": "5.9.3",
     "typescript-eslint": "^8.15.0"
   }
 }
