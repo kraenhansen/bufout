@@ -184,6 +184,49 @@ function forwardOutput(
   }
 }
 
+/**
+ * Pipe both of the child's output streams into their destinations right away.
+ * Returns a no-op flush, as nothing gets buffered.
+ */
+function inheritOutput(
+  childStdout: Readable,
+  childStderr: Readable,
+  stdout: Writable,
+  stderr: Writable,
+  prefix: string | undefined,
+): (stream?: "stdout" | "stderr" | "both") => void {
+  pipeOutput(childStdout, stdout, prefix);
+  pipeOutput(childStderr, stderr, prefix);
+  return () => {
+    // Nothing to flush
+  };
+}
+
+/**
+ * Buffer the output instead of piping the child into the destinations.
+ * Returns a flush which forwards the buffer directly into the destinations,
+ * adding no listeners to them.
+ */
+function bufferOutput(
+  childStdout: Readable,
+  childStderr: Readable,
+  stdout: Writable,
+  stderr: Writable,
+  prefix: string | undefined,
+): (stream?: "stdout" | "stderr" | "both") => void {
+  const transform = createMultiBufferedTransform(
+    [childStdout, childStderr] as const,
+    { end: false },
+  );
+  const [stdoutOutput, stderrOutput] = transform.outputs;
+  return (stream = "both") => {
+    forwardOutput(stdoutOutput, stdout, prefix);
+    forwardOutput(stderrOutput, stderr, prefix);
+    transform.flush(determineStream(stream, childStdout, childStderr));
+    transform.destroy();
+  };
+}
+
 function determineStream(
   stream: "stdout" | "stderr" | "both",
   stdout: Readable,
@@ -228,28 +271,10 @@ export function spawn(
   registerChild(child);
 
   // Bind transformed and buffered outputs to the destination streams
-  let flushOutput: (stream?: "stdout" | "stderr" | "both") => void;
-  if (outputMode === "inherit") {
-    pipeOutput(childStdout, stdout, outputPrefix);
-    pipeOutput(childStderr, stderr, outputPrefix);
-    flushOutput = () => {
-      // Nothing to flush
-    };
-  } else {
-    // Buffer the output instead of piping the child into the destinations:
-    // flushing forwards the buffer directly, adding no listeners to the destinations.
-    const transform = createMultiBufferedTransform(
-      [childStdout, childStderr] as const,
-      { end: false },
-    );
-    const [stdoutOutput, stderrOutput] = transform.outputs;
-    flushOutput = (stream = "both") => {
-      forwardOutput(stdoutOutput, stdout, outputPrefix);
-      forwardOutput(stderrOutput, stderr, outputPrefix);
-      transform.flush(determineStream(stream, childStdout, childStderr));
-      transform.destroy();
-    };
-  }
+  const flushOutput =
+    outputMode === "inherit"
+      ? inheritOutput(childStdout, childStderr, stdout, stderr, outputPrefix)
+      : bufferOutput(childStdout, childStderr, stdout, stderr, outputPrefix);
 
   const result = new Promise<void>((resolve, reject) => {
     child.once("exit", (code, signal) => {

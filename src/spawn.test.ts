@@ -283,6 +283,18 @@ describe("spawn", () => {
     }
 
     /**
+     * Run an async action a number of times in sequence.
+     */
+    async function repeat(
+      count: number,
+      action: (index: number) => Promise<void>,
+    ) {
+      for (const index of Array(count).keys()) {
+        await action(index);
+      }
+    }
+
+    /**
      * Asserts that running the action neither grows the number of listeners on the
      * process and its stdio streams, nor emits a MaxListenersExceededWarning.
      */
@@ -332,12 +344,12 @@ describe("spawn", () => {
       describe(`${outputMode} output-mode`, () => {
         it("doesn't leak listeners on sequential spawns", async () => {
           await assertListenerHygiene(async () => {
-            for (let i = 0; i < SPAWN_COUNT; i++) {
+            await repeat(SPAWN_COUNT, async (i) => {
               await spawn(process.execPath, ["-e", PRINTING_SCRIPT], {
                 outputMode,
                 outputPrefix: i % 2 === 0 ? "[prefix] " : undefined,
               });
-            }
+            });
           });
         });
 
@@ -356,12 +368,12 @@ describe("spawn", () => {
 
         it("doesn't leak listeners when spawning fails", async () => {
           await assertListenerHygiene(async () => {
-            for (let i = 0; i < SPAWN_COUNT; i++) {
-              await assert.rejects(
+            await repeat(SPAWN_COUNT, () =>
+              assert.rejects(
                 spawn("this-command-does-not-exist", [], { outputMode }),
                 /ENOENT/,
-              );
-            }
+              ),
+            );
           });
         });
       });
@@ -369,31 +381,31 @@ describe("spawn", () => {
 
     it("doesn't leak listeners when failures are never flushed", async () => {
       await assertListenerHygiene(async () => {
-        for (let i = 0; i < SPAWN_COUNT; i++) {
-          await assert.rejects(
+        await repeat(SPAWN_COUNT, () =>
+          assert.rejects(
             spawn(
               process.execPath,
               ["-e", PRINTING_SCRIPT + " process.exit(1);"],
               { outputMode: "buffered" },
             ),
             SpawnFailure,
-          );
-        }
+          ),
+        );
       });
     });
 
     it("doesn't leak listeners when failures are flushed", async () => {
       await assertListenerHygiene(async () => {
-        for (let i = 0; i < SPAWN_COUNT; i++) {
-          await spawn(
+        await repeat(SPAWN_COUNT, () =>
+          spawn(
             process.execPath,
             ["-e", PRINTING_SCRIPT + " process.exit(1);"],
             { outputMode: "buffered", outputPrefix: "[prefix] " },
           ).catch((error) => {
             assert(error instanceof SpawnFailure);
             error.flushOutput();
-          });
-        }
+          }),
+        );
         // Sanity check that flushing actually wrote through to the output
         assert.notEqual(PATCHED.stdout.drain(), "");
         assert.notEqual(PATCHED.stderr.drain(), "");
