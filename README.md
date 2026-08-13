@@ -72,12 +72,18 @@ stored in the repository. Publishing this way also gets the package
 [provenance attestations](https://docs.npmjs.com/generating-provenance-statements/) for free.
 
 1. Bump `version` in `package.json` on `main`.
-2. Run the "Publish" workflow from the `main` branch, choosing a mode:
-   - `stage` (default) runs [`npm stage publish`](https://docs.npmjs.com/cli/v11/commands/npm-stage/),
-     which uploads the tarball to the stage queue without making it installable.
-   - `publish` runs `npm publish`, making the version available immediately.
-3. When staging, promote the release by approving it with 2FA — either from the package page on
-   npmjs.com or from a local checkout:
+2. Create a GitHub release for the new version, from the web UI or the CLI:
+
+   ```sh
+   gh release create v0.3.3 --generate-notes
+   ```
+
+   The tag has to be the package version prefixed with `v`, or the workflow fails the release.
+   Marking it as a pre-release publishes it under the `next` dist-tag instead of `latest`.
+3. Publishing the release runs the workflow, which
+   [stages](https://docs.npmjs.com/cli/v11/commands/npm-stage/) the tarball: it is uploaded to npm but
+   not installable yet. Promote it by approving it with 2FA — either from the package page on npmjs.com
+   or from a local checkout:
 
    ```sh
    npm stage list bufout
@@ -87,7 +93,11 @@ stored in the repository. Publishing this way also gets the package
 
    OIDC tokens deliberately cannot approve staged releases, which is what makes this a human gate.
 
+The workflow can also be dispatched manually, which is the way to publish straight past the stage queue
+(`mode: publish`) or to use a different dist-tag.
+
 The trusted publisher on npm is configured for the `main` environment, so the workflow job runs in the
 GitHub `main` environment and must keep both its name and the `publish.yml` filename in sync with that
-configuration. Approving a staged release locally needs npm >= 11.15.0 (trusted publishing alone needs
+configuration. Because releases run from a tag, the environment's deployment branch rules need to allow
+the `v*` tag (or all branches and tags), otherwise GitHub blocks the job before it starts. Approving a staged release locally needs npm >= 11.15.0 (trusted publishing alone needs
 >= 11.5.1) — recent Node 24 releases bundle a new enough npm.

@@ -1,6 +1,9 @@
 name: Publish
 
 on:
+  release:
+    types:
+      - published
   workflow_dispatch:
     inputs:
       mode:
@@ -42,40 +45,50 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
-      - name: Read package name and version
-        id: package
-        run: |
-          {
-            echo "name=$(node --print 'require("./package.json").name')"
-            echo "version=$(node --print 'require("./package.json").version')"
-          } >> "$GITHUB_OUTPUT"
-      - name: Assert version is not already published
+      - name: Resolve release
+        id: release
         env:
-          SPEC: ${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}
+          # Releases stage by default, leaving the promotion to the registry as a manual step.
+          # Pre-releases go out under "next" to avoid moving the "latest" dist-tag.
+          MODE: ${{ inputs.mode || 'stage' }}
+          DIST_TAG: ${{ inputs.dist_tag || (github.event.release.prerelease && 'next' || 'latest') }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
-          if npm view "$SPEC" version --silent > /dev/null 2>&1; then
-            echo "::error::$SPEC is already published - bump the version in package.json first"
+          NAME="$(node --print 'require("./package.json").name')"
+          VERSION="$(node --print 'require("./package.json").version')"
+          if [ -n "$TAG_NAME" ] && [ "$TAG_NAME" != "v$VERSION" ]; then
+            echo "::error::Release tag $TAG_NAME does not match the package version $VERSION"
             exit 1
           fi
+          if npm view "$NAME@$VERSION" version --silent > /dev/null 2>&1; then
+            echo "::error::$NAME@$VERSION is already published - bump the version in package.json first"
+            exit 1
+          fi
+          {
+            echo "name=$NAME"
+            echo "version=$VERSION"
+            echo "mode=$MODE"
+            echo "dist-tag=$DIST_TAG"
+          } >> "$GITHUB_OUTPUT"
       # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment and exchanges the token
       # itself. Provenance is generated automatically when publishing via OIDC, but passing
       # --provenance makes it explicit (and fails the job loudly if it ever cannot be generated).
       - name: Stage publish
-        if: inputs.mode == 'stage'
+        if: steps.release.outputs.mode == 'stage'
         env:
-          DIST_TAG: ${{ inputs.dist_tag }}
+          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
         run: npm stage publish --provenance --tag "$DIST_TAG"
       - name: Publish
-        if: inputs.mode == 'publish'
+        if: steps.release.outputs.mode == 'publish'
         env:
-          DIST_TAG: ${{ inputs.dist_tag }}
+          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
         run: npm publish --provenance --tag "$DIST_TAG"
       - name: Summarize
         env:
-          NAME: ${{ steps.package.outputs.name }}
-          VERSION: ${{ steps.package.outputs.version }}
-          DIST_TAG: ${{ inputs.dist_tag }}
-          MODE: ${{ inputs.mode }}
+          NAME: ${{ steps.release.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
+          MODE: ${{ steps.release.outputs.mode }}
         run: |
           if [ "$MODE" = "stage" ]; then
             {
