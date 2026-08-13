@@ -63,3 +63,31 @@ const sleeper = spawn("sleep", ["10"]);
 // If you get impatient
 sleeper.kill();
 ```
+
+## Releasing
+
+Releases are published by the [Publish workflow](./.github/workflows/publish.yml), which authenticates
+through [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC), so no npm token is
+stored in the repository. Publishing this way also gets the package
+[provenance attestations](https://docs.npmjs.com/generating-provenance-statements/) for free.
+
+1. Bump `version` in `package.json` on `main`.
+2. Run the "Publish" workflow from the `main` branch, choosing a mode:
+   - `stage` (default) runs [`npm stage publish`](https://docs.npmjs.com/cli/v11/commands/npm-stage/),
+     which uploads the tarball to the stage queue without making it installable.
+   - `publish` runs `npm publish`, making the version available immediately.
+3. When staging, promote the release by approving it with 2FA — either from the package page on
+   npmjs.com or from a local checkout:
+
+   ```sh
+   npm stage list bufout
+   npm stage download <stage-id> # optional: inspect the exact tarball that was staged
+   npm stage approve <stage-id>  # or: npm stage reject <stage-id>
+   ```
+
+   OIDC tokens deliberately cannot approve staged releases, which is what makes this a human gate.
+
+The trusted publisher on npm is configured for the `main` environment, so the workflow job runs in the
+GitHub `main` environment and must keep both its name and the `publish.yml` filename in sync with that
+configuration. Staged publishing needs npm >= 11.15.0 (trusted publishing alone needs >= 11.5.1), which
+is why the workflow updates npm before publishing.
