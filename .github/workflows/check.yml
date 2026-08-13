@@ -1,4 +1,4 @@
-name: Test
+name: Check
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  check:
     name: Lint, build and test
     runs-on: ubuntu-latest
     steps:
