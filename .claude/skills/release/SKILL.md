@@ -74,7 +74,7 @@ The stage queue is also on the package page at npmjs.com if they'd rather click.
 
 ## When it goes wrong
 
-**The job never starts, or GitHub reports the tag is not allowed to deploy.** The job runs in the `main` environment (required, because npm's trusted publisher is scoped to it), and a release runs from `refs/tags/v*`. If that environment's deployment rules only allow branches, tags are blocked. Fix it in Settings → Environments → main → Deployment branches and tags by adding a `v*` **tag** rule. This is repo configuration, so tell the user rather than trying to route around it.
+**The job never starts, or GitHub reports the tag is not allowed to deploy.** The job runs in the `main` environment (required, because npm's trusted publisher is scoped to it), and a release runs from `refs/tags/v*`. If that environment's deployment rules only allow branches, tags are blocked - a branch rule never matches a release run. Fix it in Settings → Environments → main → Deployment branches and tags by adding a `v*` **tag** rule. This is repo configuration, so tell the user rather than trying to route around it.
 
 **"Release tag vX.Y.Z does not match the package version".** The tag and `package.json` drifted apart - usually a hand-made tag. Delete the release and tag, then redo the bump with `npm version`.
 
@@ -82,4 +82,4 @@ The stage queue is also on the package page at npmjs.com if they'd rather click.
 
 **The workflow succeeded but npm still doesn't have it.** Expected - it is sitting in the stage queue waiting for the 2FA approval above. Check with `npm stage list bufout`.
 
-**Something needs to go out without the staging gate.** The workflow can be dispatched manually with `mode: publish`, which calls `npm publish` directly. Reach for it only when the user explicitly asks, and say plainly that it skips the human review step that staging exists to provide.
+**Something needs to go out urgently.** There is no bypass - publishing a release is the only path, and it always stages. That is not an obstacle worth engineering around: approving from the stage queue takes seconds once the maintainer is at a terminal, so the fast path is to get them the `npm stage approve` command, not to look for another way onto the registry.

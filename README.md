@@ -93,11 +93,12 @@ stored in the repository. Publishing this way also gets the package
 
    OIDC tokens deliberately cannot approve staged releases, which is what makes this a human gate.
 
-The workflow can also be dispatched manually, which is the way to publish straight past the stage queue
-(`mode: publish`) or to use a different dist-tag.
+Publishing a release is the only way to publish: there is no manual workflow dispatch, so every version
+that reaches npm has a release to go with it.
 
 The trusted publisher on npm is configured for the `main` environment, so the workflow job runs in the
 GitHub `main` environment and must keep both its name and the `publish.yml` filename in sync with that
-configuration. Because releases run from a tag, the environment's deployment branch rules need to allow
-the `v*` tag (or all branches and tags), otherwise GitHub blocks the job before it starts. Approving a staged release locally needs npm >= 11.15.0 (trusted publishing alone needs
+configuration. Because releases run from a tag rather than a branch, that environment needs a `v*` **tag**
+rule under "Deployment branches and tags" - a branch rule never matches a release run, and GitHub blocks
+the job before it starts. Approving a staged release locally needs npm >= 11.15.0 (trusted publishing alone needs
 >= 11.5.1) — recent Node 24 releases bundle a new enough npm.

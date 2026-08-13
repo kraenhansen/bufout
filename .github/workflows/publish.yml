@@ -4,19 +4,6 @@ on:
   release:
     types:
       - published
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Stage the release for manual approval, or publish it right away
-        type: choice
-        options:
-          - stage
-          - publish
-        default: stage
-      dist_tag:
-        description: The npm dist-tag to publish under
-        type: string
-        default: latest
 
 concurrency:
   group: ${{ github.workflow }}
@@ -48,15 +35,13 @@ jobs:
       - name: Resolve release
         id: release
         env:
-          # Releases stage by default, leaving the promotion to the registry as a manual step.
-          # Pre-releases go out under "next" to avoid moving the "latest" dist-tag.
-          MODE: ${{ inputs.mode || 'stage' }}
-          DIST_TAG: ${{ inputs.dist_tag || (github.event.release.prerelease && 'next' || 'latest') }}
+          # Pre-releases go out under "next" to avoid moving the "latest" dist-tag
+          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
           TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           NAME="$(node --print 'require("./package.json").name')"
           VERSION="$(node --print 'require("./package.json").version')"
-          if [ -n "$TAG_NAME" ] && [ "$TAG_NAME" != "v$VERSION" ]; then
+          if [ "$TAG_NAME" != "v$VERSION" ]; then
             echo "::error::Release tag $TAG_NAME does not match the package version $VERSION"
             exit 1
           fi
@@ -67,43 +52,32 @@ jobs:
           {
             echo "name=$NAME"
             echo "version=$VERSION"
-            echo "mode=$MODE"
             echo "dist-tag=$DIST_TAG"
           } >> "$GITHUB_OUTPUT"
       # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment and exchanges the token
       # itself. Provenance is generated automatically when publishing via OIDC, but passing
       # --provenance makes it explicit (and fails the job loudly if it ever cannot be generated).
+      # Staging leaves the release uninstallable until a maintainer approves it with 2FA.
       - name: Stage publish
-        if: steps.release.outputs.mode == 'stage'
         env:
           DIST_TAG: ${{ steps.release.outputs.dist-tag }}
         run: npm stage publish --provenance --tag "$DIST_TAG"
-      - name: Publish
-        if: steps.release.outputs.mode == 'publish'
-        env:
-          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
-        run: npm publish --provenance --tag "$DIST_TAG"
       - name: Summarize
         env:
           NAME: ${{ steps.release.outputs.name }}
           VERSION: ${{ steps.release.outputs.version }}
           DIST_TAG: ${{ steps.release.outputs.dist-tag }}
-          MODE: ${{ steps.release.outputs.mode }}
         run: |
-          if [ "$MODE" = "stage" ]; then
-            {
-              echo "### Staged \`$NAME@$VERSION\` (\`$DIST_TAG\`) :package:"
-              echo
-              echo "It is not installable yet. Approve it with 2FA to promote it to the registry:"
-              echo
-              echo '```sh'
-              echo "npm stage list $NAME"
-              echo "npm stage view <stage-id> # or: npm stage download <stage-id>"
-              echo "npm stage approve <stage-id> # or: npm stage reject <stage-id>"
-              echo '```'
-              echo
-              echo "The stage queue is also available on <https://www.npmjs.com/package/$NAME>."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "### Published \`$NAME@$VERSION\` (\`$DIST_TAG\`) :rocket:" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "### Staged \`$NAME@$VERSION\` (\`$DIST_TAG\`) :package:"
+            echo
+            echo "It is not installable yet. Approve it with 2FA to promote it to the registry:"
+            echo
+            echo '```sh'
+            echo "npm stage list $NAME"
+            echo "npm stage view <stage-id> # or: npm stage download <stage-id>"
+            echo "npm stage approve <stage-id> # or: npm stage reject <stage-id>"
+            echo '```'
+            echo
+            echo "The stage queue is also available on <https://www.npmjs.com/package/$NAME>."
+          } >> "$GITHUB_STEP_SUMMARY"
