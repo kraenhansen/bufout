@@ -63,3 +63,8 @@ const sleeper = spawn("sleep", ["10"]);
 // If you get impatient
 sleeper.kill();
 ```
+
+## Releasing
+
+New versions are published to npm from a GitHub release, using trusted publishing (OIDC) with
+provenance. See [RELEASING.md](./RELEASING.md).

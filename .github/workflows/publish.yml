@@ -1,0 +1,85 @@
+name: Publish
+
+on:
+  release:
+    types:
+      - published
+
+concurrency:
+  group: ${{ github.workflow }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    # Must match the environment configured on the npm trusted publisher
+    environment: main
+    permissions:
+      contents: read
+      # Needed for npm to mint the OIDC token used for trusted publishing and provenance
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Bundles npm >= 11.15.0, needed for trusted publishing and "npm stage publish"
+          node-version: lts/krypton
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - name: Resolve release
+        id: release
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          NAME="$(node --print 'require("./package.json").name')"
+          VERSION="$(node --print 'require("./package.json").version')"
+          if [ "$TAG_NAME" != "v$VERSION" ]; then
+            echo "::error::Release tag $TAG_NAME does not match the package version $VERSION"
+            exit 1
+          fi
+          # Everything published here becomes the "latest" dist-tag, so refuse anything
+          # pre-release shaped rather than quietly pointing "latest" at it.
+          if [ "$PRERELEASE" = "true" ] || [ "$VERSION" != "${VERSION%%-*}" ]; then
+            echo "::error::Pre-releases are not supported - $VERSION would still become the latest version"
+            exit 1
+          fi
+          if npm view "$NAME@$VERSION" version --silent > /dev/null 2>&1; then
+            echo "::error::$NAME@$VERSION is already published - bump the version in package.json first"
+            exit 1
+          fi
+          {
+            echo "name=$NAME"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+      # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment and exchanges the token
+      # itself. Provenance is generated automatically when publishing via OIDC, but passing
+      # --provenance makes it explicit (and fails the job loudly if it ever cannot be generated).
+      # Staging leaves the release uninstallable until a maintainer approves it with 2FA.
+      # No --tag: the default "latest" is the only channel this package publishes to.
+      - name: Stage publish
+        run: npm stage publish --provenance
+      - name: Summarize
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          {
+            echo "### Staged \`$NAME@$VERSION\` :package:"
+            echo
+            echo "It is not installable yet. Approve it with 2FA to promote it to the registry:"
+            echo
+            echo '```sh'
+            echo "npm stage list $NAME"
+            echo "npm stage view <stage-id> # or: npm stage download <stage-id>"
+            echo "npm stage approve <stage-id> # or: npm stage reject <stage-id>"
+            echo '```'
+            echo
+            echo "The stage queue is also available on <https://www.npmjs.com/package/$NAME>."
+          } >> "$GITHUB_STEP_SUMMARY"
