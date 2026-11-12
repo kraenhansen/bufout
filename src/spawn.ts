@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import cp, { ChildProcess } from "node:child_process";
 
+import { connectInput, disconnectInput } from "./input.ts";
 import { createMultiBufferedTransform } from "./MultiBufferedTransform.ts";
 import { createPrefixingTransform } from "./PrefixingTransform.ts";
 import { PassThrough, Readable, Writable } from "node:stream";
@@ -10,6 +11,26 @@ export type KillablePromise<T> = Promise<T> & {
    * Kills the child process.
    */
   kill: ChildProcess["kill"];
+};
+
+export type SpawnedChild<T> = KillablePromise<T> & {
+  /**
+   * The child's stdin, for writing to the child directly.
+   * Call `end()` to signal EOF to the child.
+   * Errors (such as writing after the child exited) are ignored.
+   */
+  stdin: Writable;
+  /**
+   * Pipe a source into the child's stdin, detaching any previously attached source.
+   * If the source ends, so does the child's stdin.
+   * The source is detached automatically when the child exits.
+   */
+  attachStdin(source: Readable): void;
+  /**
+   * Stop piping the attached source (if any) into the child's stdin.
+   * Neither the source nor the child's stdin are ended.
+   */
+  detachStdin(): void;
 };
 
 export class SpawnFailure extends Error {
@@ -60,6 +81,27 @@ export type SpawnOptions = {
    * Add a prefix to all lines written to the output streams.
    */
   outputPrefix?: string;
+  /**
+   * In the "buffered" output-mode, keep only the most recent lines of output (across stdout and stderr),
+   * evicting the oldest. Useful to bound the memory used by long-lived processes.
+   * @default Infinity (unbounded)
+   */
+  maxBufferedLines?: number;
+  /**
+   * In the "buffered" output-mode, keep only the most recent bytes of output (across stdout and stderr),
+   * evicting the oldest lines.
+   * @default Infinity (unbounded)
+   */
+  maxBufferedBytes?: number;
+  /**
+   * Input for the child's stdin:
+   * - `"pipe"` (default): stdin is left open with nothing attached.
+   *   Write to it through `stdin` or attach a source through `attachStdin` on the returned promise.
+   * - `"close"`: stdin is ended right away, signalling EOF to children reading it.
+   * - A `Readable` (such as `process.stdin`), piped into the child's stdin.
+   *   If it ends, so does the child's stdin. Equivalent to calling `attachStdin` right away.
+   */
+  stdin?: "pipe" | "close" | Readable;
   /**
    * Use this when flushing output to stdout.
    */
@@ -213,10 +255,12 @@ function bufferOutput(
   stdout: Writable,
   stderr: Writable,
   prefix: string | undefined,
+  maxLines: number,
+  maxBytes: number,
 ): (stream?: "stdout" | "stderr" | "both") => void {
   const transform = createMultiBufferedTransform(
     [childStdout, childStderr] as const,
-    { end: false },
+    { end: false, maxLines, maxBytes },
   );
   const [stdoutOutput, stderrOutput] = transform.outputs;
   return (stream = "both") => {
@@ -244,6 +288,39 @@ function determineStream(
 }
 
 /**
+ * Attach and detach sources to the child's stdin, one at a time.
+ */
+function bindInput(childStdin: Writable) {
+  // Writing to a child which exited (or closed its stdin) fails with EPIPE (or similar):
+  // its failure is reported through the exit code instead.
+  childStdin.on("error", () => {});
+  let attached: Readable | null = null;
+  const detach = () => {
+    if (attached) {
+      disconnectInput(attached, childStdin);
+      attached = null;
+    }
+  };
+  const attach = (source: Readable) => {
+    assert(source instanceof Readable, "Expected a Readable source");
+    detach();
+    if (childStdin.writableEnded || childStdin.destroyed) {
+      return;
+    }
+    attached = source;
+    connectInput(source, childStdin, () => {
+      if (attached === source) {
+        attached = null;
+        childStdin.end();
+      }
+    });
+  };
+  // The child closed its stdin (or exited)
+  childStdin.once("close", detach);
+  return { attach, detach };
+}
+
+/**
  * Spawn a child process, with it's buffer
  */
 export function spawn(
@@ -252,34 +329,69 @@ export function spawn(
   {
     outputMode = "inherit",
     outputPrefix,
+    stdin = "pipe",
+    maxBufferedLines = Infinity,
+    maxBufferedBytes = Infinity,
     stdout = process.stdout,
     stderr = process.stderr,
     ...options
   }: SpawnOptions = {},
-): KillablePromise<void> {
+): SpawnedChild<void> {
   if (outputMode !== "inherit" && outputMode !== "buffered") {
     throw new Error(`Unexpected output mode ${outputMode as string}`);
+  }
+  for (const [name, value] of Object.entries({
+    maxBufferedLines,
+    maxBufferedBytes,
+  })) {
+    if (!(value === Infinity || (Number.isInteger(value) && value > 0))) {
+      throw new TypeError(
+        `Expected '${name}' to be a positive integer or Infinity, got ${value}`,
+      );
+    }
+  }
+  if (stdin !== "pipe" && stdin !== "close" && !(stdin instanceof Readable)) {
+    throw new TypeError(
+      `Expected 'stdin' to be "pipe", "close" or a Readable, got ${String(stdin)}`,
+    );
   }
   const child = cp.spawn(command, args, {
     ...options,
     stdio: "pipe",
   });
-  const { stdout: childStdout, stderr: childStderr } = child;
+  const { stdin: childStdin, stdout: childStdout, stderr: childStderr } = child;
+  assert(childStdin, "Expected child to have stdin");
   assert(childStdout, "Expected child to have stdout");
   assert(childStderr, "Expected child to have stderr");
   // Kill the child process if the main process exits or gets interrupted
   registerChild(child);
 
+  const input = bindInput(childStdin);
+  if (stdin === "close") {
+    childStdin.end();
+  } else if (stdin instanceof Readable) {
+    input.attach(stdin);
+  }
+
   // Bind transformed and buffered outputs to the destination streams
   const flushOutput =
     outputMode === "inherit"
       ? inheritOutput(childStdout, childStderr, stdout, stderr, outputPrefix)
-      : bufferOutput(childStdout, childStderr, stdout, stderr, outputPrefix);
+      : bufferOutput(
+          childStdout,
+          childStderr,
+          stdout,
+          stderr,
+          outputPrefix,
+          maxBufferedLines,
+          maxBufferedBytes,
+        );
 
   const result = new Promise<void>((resolve, reject) => {
     child.once("exit", (code, signal) => {
-      // The child can no longer be killed, nor react to an interrupt
+      // The child can no longer be killed, nor react to an interrupt, nor read input
       unregisterChild(child);
+      input.detach();
       if (code === 0 && signal === null) {
         resolve();
       } else {
@@ -289,12 +401,16 @@ export function spawn(
     // Propagate errors (a child failing to spawn emits "error" but never "exit")
     child.once("error", (error) => {
       unregisterChild(child);
+      input.detach();
       reject(error);
     });
-  }) as KillablePromise<void>;
+  }) as SpawnedChild<void>;
 
   // Propagate the kill method
   result.kill = child.kill.bind(child);
+  result.stdin = childStdin;
+  result.attachStdin = input.attach;
+  result.detachStdin = input.detach;
 
   return result;
 }

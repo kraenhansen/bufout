@@ -116,4 +116,93 @@ describe("MultiBufferedTransform", () => {
     const output = streamsToString(transform.outputs);
     assert.equal(await output, "greatworld");
   });
+
+  describe("bounded by maxLines", () => {
+    it("evicts the oldest lines, in order across inputs", async () => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const transform = createMultiBufferedTransform([stdout, stderr], {
+        maxLines: 3,
+      });
+
+      process.nextTick(() => {
+        stdout.write("out 1\n");
+        stderr.write("err 1\n");
+        stdout.write("out 2\nout 3\n");
+        stderr.write("err 2\n");
+      });
+
+      setImmediate(() => {
+        transform.flush();
+        transform.destroy();
+      });
+
+      const output = streamsToString(transform.outputs);
+      assert.equal(await output, "out 2\nout 3\nerr 2\n");
+    });
+
+    it("joins partial lines across chunks", async () => {
+      const passthrough = new PassThrough();
+      const transform = createMultiBufferedTransform([passthrough], {
+        maxLines: 2,
+      });
+
+      process.nextTick(() => {
+        passthrough.write("first\nsec");
+        passthrough.write("ond\nthi");
+        passthrough.write("rd\nfou");
+      });
+
+      setImmediate(() => {
+        transform.flush();
+        transform.destroy();
+      });
+
+      const output = streamsToString(transform.outputs);
+      assert.equal(await output, "third\nfou");
+    });
+
+    it("flushes a stream exclusively", async () => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const transform = createMultiBufferedTransform([stdout, stderr], {
+        maxLines: 2,
+      });
+
+      process.nextTick(() => {
+        stdout.write("out 1\n");
+        stderr.write("err 1\n");
+        stdout.write("out 2\n");
+        stderr.write("err 2\n");
+      });
+
+      setImmediate(() => {
+        transform.flush(stderr);
+        transform.destroy();
+      });
+
+      const output = streamsToString(transform.outputs);
+      // The two most recent lines were "out 2" and "err 2"
+      assert.equal(await output, "err 2\n");
+    });
+  });
+
+  it("bounds by maxBytes", async () => {
+    const passthrough = new PassThrough();
+    const transform = createMultiBufferedTransform([passthrough], {
+      maxBytes: 8,
+    });
+
+    process.nextTick(() => {
+      passthrough.write("123\n456\n789\n");
+    });
+
+    setImmediate(() => {
+      transform.flush();
+      transform.destroy();
+    });
+
+    const output = streamsToString(transform.outputs);
+    assert.equal(await output, "456\n789\n");
+  });
 });
