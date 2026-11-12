@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new release of bufout - bump the version, get the commit onto main, and create the GitHub release that tags it and triggers the publish workflow. Use this whenever the user wants to release, cut a release, ship a version, bump the version, or get changes out on npm, including phrasings like "let's do a patch release", "ship 0.4.0", "time to publish this", or "can you release what's on main". Also use it when a release seems stuck or never showed up on npm, since the last step is a manual approval that is easy to forget.
+description: Cut a new release of bufout - get the pending changesets into the "Version Packages" pull request, get it merged, and follow the publish workflow through to the staged version on npm. Use this whenever the user wants to release, cut a release, ship a version, bump the version, or get changes out on npm, including phrasings like "let's do a patch release", "ship 0.4.0", "time to publish this", or "can you release what's on main". Also use it when a release seems stuck or never showed up on npm, since the last step is a manual approval that is easy to forget.
 ---
 
 # Releasing bufout
@@ -10,74 +10,42 @@ repo is the source of truth - read `.github/workflows/publish.yml` and fix which
 
 ## How a release reaches npm
 
-Four things have to happen, and only the first three are yours:
+`.github/workflows/publish.yml` runs on every push to `main` and does one of three things:
 
-1. `npm run version-packages` turns the pending changesets in `.changeset/` into the `package.json` bump and a `CHANGELOG.md` entry.
-2. That commit reaches `main` through a pull request, like every other change.
-3. A **published** GitHub release, created against that commit, tags it and triggers `.github/workflows/publish.yml`.
-4. The workflow authenticates to npm over OIDC (no token anywhere) and runs `npm stage publish`, which uploads the tarball to npm's stage queue. **It is not installable yet.** A maintainer promotes it by approving with 2FA.
+1. **Changesets are pending** in `.changeset/`: it opens or updates the "Version Packages" pull request, which holds the `package.json` bump, the new `CHANGELOG.md` section, and the consumed changesets removed.
+2. **None are pending and the `package.json` version has no `v` tag** - the state merging that pull request leaves behind: it creates the GitHub release and tag for the merged commit, authenticates to npm over OIDC (no token anywhere) and runs `npm stage publish`, which uploads the tarball to npm's stage queue. **It is not installable yet.** A maintainer promotes it by approving with 2FA.
+3. **Otherwise** it does nothing.
 
-Step 4's approval is deliberately out of reach: npm refuses OIDC tokens for stage approval precisely so a human sees the release before the world does. Never try to work around it - your job ends by handing the maintainer the exact commands.
+So cutting a release means getting the "Version Packages" pull request right and merged. Never bump the version, tag, create a GitHub release, or run `changeset publish` by hand - the workflow owns all of it, and a hand-made tag makes it skip the version.
+
+The approval at the end is deliberately out of reach: npm refuses OIDC tokens for stage approval precisely so a human sees the release before the world does. Never try to work around it - your job ends by handing the maintainer the exact commands.
 
 ## Before touching anything
 
-Confirm the release with the user before opening or creating anything. Publishing a release is outward-facing and awkward to undo - npm allows unpublishing a version for only 72 hours, and that version number is burned forever afterwards.
+Confirm the release with the user before merging anything. Publishing is outward-facing and awkward to undo - npm allows unpublishing a version for only 72 hours, and that version number is burned forever afterwards.
 
-Check that:
-
-- You are on `main` with a clean tree and in sync with `origin/main`. The version commit should contain the release and nothing else, so do not stash around a dirty tree.
-- CI is green on the commit you are about to release (`gh run list --branch main --limit 3`). The publish workflow reruns lint, build, and tests anyway, so a broken commit just fails later and more expensively.
-
-The steps below go through `gh`, which is not installed in Claude Code web and remote sessions. Install it up front - `GH_TOKEN` is already in the environment, so it authenticates itself - rather than hand-rolling the equivalent REST calls with `curl` further down. Search the available GitHub tools for one that creates a release first, though - `gh` is the fallback for when there isn't one, not the preference.
+Use the available GitHub tools for pull requests and workflow runs. Where there are none, `gh` does the same (it is not installed in Claude Code web and remote sessions, but `GH_TOKEN` is already in the environment, so it authenticates itself once installed).
 
 ## Cutting the release
 
-The bump level is not yours to pick: it is the highest level among the pending [changesets](https://github.com/changesets/changesets), each of which was written alongside the change it describes.
+Find the open "Version Packages" pull request (head branch `changeset-release/main`). If there is none, check `main`:
 
-```sh
-npx changeset status --verbose          # the bump and the changesets behind it
-git log --oneline v0.3.2..main          # substitute the actual latest tag
-```
+- No changesets in `.changeset/`: there is nothing to release until one is written. Look at what landed since the last tag (`git log --oneline v0.3.2..origin/main`, substituting the latest tag) and propose a changeset to the user, through a pull request like every other change (`npx changeset add --patch bufout -m "..."` skips the prompts).
+- Changesets exist but no pull request: the workflow failed. Look at its latest run on `main` - see "When it goes wrong".
 
-Compare the two before going further. If something consumers will notice landed without a changeset, or a changeset undersells a change (breaking API changes are a major, new exported behaviour is a minor, everything else is a patch), raise it with the user and add or fix a changeset first (`npx changeset add --patch bufout -m "..."` skips the prompts) - bufout is a library, so its consumers read the version number as a promise. If there are no changesets at all, there is nothing to release until one is written.
+Then review the pull request with the user rather than merging blind:
 
-```sh
-npm run version-packages
-git commit -am "Release 0.3.3"          # the version it just wrote to package.json
-```
+- The bump level is the highest among the changesets. Compare it and the changelog section against what actually landed since the last tag. Breaking API changes are a major, new exported behaviour is a minor, everything else is a patch - bufout is a library, so its consumers read the version number as a promise. If something consumers will notice landed without a changeset, or a changeset undersells a change, land a fixing changeset on `main` first; the pull request updates itself.
+- Checks do not start on this pull request by themselves, because a workflow opened it. The changes are mechanical and the publish job reruns lint, build, and tests before staging, but if the merge is blocked on a required check, ask the user to close and reopen the pull request, which starts them.
 
-`version-packages` deletes the consumed changesets, bumps `package.json`, prepends the new section to `CHANGELOG.md`, and syncs the version in `package-lock.json` (which `changeset version` alone leaves stale). Read the changelog section back to the user. It creates no commit and no tag - never run `npm version` on top of it, and never run `changeset publish` or `changeset git-tag`: the tag comes from the GitHub release and the publish from the workflow.
-
-### Getting the version commit onto `main`
-
-The release has to point at a commit that is on `main`, and the version bump gets there the same way every other change does - through a pull request:
-
-1. Push the version commit to a branch and open a PR against `main`.
-2. Get it merged. This repo allows **squash merges only** - merge commits and rebases are both turned off - so the branch arrives as a single new commit and your version commit is rewritten. Expect that rather than fighting it, and don't promise the user a merge commit.
-3. `git fetch origin main` and read back the SHA of the squashed commit on `origin/main`. That SHA is what the release targets. It is a different commit than the one you made, which costs nothing: `package.json` at that commit carries the new version, and that is all the workflow compares the tag against.
-
-### Publishing the release
-
-Publishing the release is what triggers the workflow, and it is also what creates the tag. Both `gh release create` and `POST /repos/{owner}/{repo}/releases` create `tag_name` themselves when it does not exist on the remote, pointing it at the target commit - so there is never a tag to push by hand.
-
-```sh
-awk '/^## /{n++} n==1' CHANGELOG.md | tail -n +2 > "$TMPDIR/notes.md"   # the newest section, minus its heading
-gh release create v0.3.3 --target <sha> --notes-file "$TMPDIR/notes.md"
-```
-
-- Pass `--target` as the **exact SHA** of the version commit, never a branch name. A branch name resolves at creation time, so a push racing you would tag the wrong commit. Pinning the SHA is what guards against tagging something unintended; `--verify-tag` cannot help here, since it requires the tag to already exist and creating it is this step's job.
-- The notes are the section `version-packages` just added to `CHANGELOG.md`, so the release and the changelog say the same thing. Don't use `--generate-notes` instead.
-- **Do not use `--draft`.** Drafts fire no event, so nothing publishes until the draft is published.
-- **Do not mark it as a pre-release**, and don't bump to a pre-release version. This package publishes only to the `latest` dist-tag, so a `0.4.0-rc.0` would become the version every consumer installs. The workflow refuses both rather than letting that happen quietly.
-
-If creating the release is denied, stop and hand the user that exact `gh release create` line - do not go looking for another way to reach the registry.
+Merge it once the user agrees. This repo allows **squash merges only**.
 
 ## Confirming and handing off
 
-Watch the run, since a failure here is silent otherwise:
+The merge triggers the publish workflow on `main`. Watch that run, since a failure here is silent otherwise:
 
 ```sh
-gh run list --workflow publish.yml --limit 1
+gh run list --workflow publish.yml --branch main --limit 1
 gh run watch <run-id>
 ```
 
@@ -93,12 +61,14 @@ The stage queue is also on the package page at npmjs.com if they'd rather click.
 
 ## When it goes wrong
 
-**The job never starts, or GitHub reports the tag is not allowed to deploy.** The job runs in the `main` environment (required, because npm's trusted publisher is scoped to it), and a release runs from `refs/tags/v*`. If that environment's deployment rules only allow branches, tags are blocked - a branch rule never matches a release run. Fix it in Settings → Environments → main → Deployment branches and tags by adding a `v*` **tag** rule. This is repo configuration, so tell the user rather than trying to route around it.
+**The version job fails with "GitHub Actions is not permitted to create or approve pull requests".** Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" is off. This is repo configuration, so tell the user rather than trying to route around it.
 
-**"Release tag vX.Y.Z does not match the package version".** The tag and `package.json` drifted apart - usually a hand-made tag. Delete the release and tag, then create the release again with the tag taken from `package.json` on `main`.
+**The publish job never starts, or GitHub reports the branch is not allowed to deploy.** The job runs in the `main` environment (required, because npm's trusted publisher is scoped to it), and it runs from `refs/heads/main`. If that environment's deployment rules do not allow the `main` branch, it is blocked. Fix it in Settings → Environments → main → Deployment branches and tags by adding a `main` **branch** rule. Again repo configuration - tell the user.
 
-**"X@Y.Z is already published".** That version exists on npm, possibly from an earlier staged release someone approved. Bump again; a published version number can never be reused.
+**The publish job failed after creating the GitHub release.** The tag now exists, so later pushes to `main` skip this version. Re-run the failed job of that same run once the cause is fixed - it skips the release step and stages. Do not delete the tag to force a retry from a new push unless the fix itself has to land on `main`; in that case delete the release and tag, and the push carrying the fix publishes.
+
+**"X@Y.Z is already published - it is missing its vY.Z tag".** That version exists on npm but was never tagged, so the workflow keeps trying. Create the missing release for the commit that was published, with the user's go-ahead.
 
 **The workflow succeeded but npm still doesn't have it.** Expected - it is sitting in the stage queue waiting for the 2FA approval above. Check with `npm stage list bufout`.
 
-**Something needs to go out urgently.** There is no bypass - publishing a release is the only path, and it always stages. That is not an obstacle worth engineering around: approving from the stage queue takes seconds once the maintainer is at a terminal, so the fast path is to get them the `npm stage approve` command, not to look for another way onto the registry.
+**Something needs to go out urgently.** There is no bypass - merging the version pull request is the only path, and it always stages. That is not an obstacle worth engineering around: approving from the stage queue takes seconds once the maintainer is at a terminal, so the fast path is to get them the `npm stage approve` command, not to look for another way onto the registry.

@@ -72,6 +72,5 @@ run `npm run changeset`, pick the bump level, describe the change, and commit th
 
 ## Releasing
 
-Pending changesets are turned into a version bump and a [CHANGELOG.md](./CHANGELOG.md) entry at release
-time. New versions are published to npm from a GitHub release, using trusted publishing (OIDC) with
-provenance. See [RELEASING.md](./RELEASING.md).
+Pending changesets are collected into a "Version Packages" pull request. Merging it publishes the new
+version to npm, using trusted publishing (OIDC) with provenance. See [RELEASING.md](./RELEASING.md).
