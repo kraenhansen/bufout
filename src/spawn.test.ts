@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import fs from "node:fs";
 
@@ -339,6 +339,220 @@ describe("spawn", () => {
     });
   });
 
+  describe("stdin", function () {
+    this.timeout(10_000);
+
+    // Echoes stdin to stdout and exits once stdin ends (prints "EOF" before exiting)
+    const ECHO_UNTIL_EOF_SCRIPT = `
+      process.stdin.pipe(process.stdout, { end: false });
+      process.stdin.once("end", () => console.log("EOF"));
+    `;
+
+    function sleep(ms: number) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Resolves to true if the promise settles within the given time.
+     */
+    async function settlesWithin(promise: Promise<unknown>, ms: number) {
+      let settled = false;
+      promise.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      await sleep(ms);
+      return settled;
+    }
+
+    it("pipes a Readable into the child (cat)", async () => {
+      const stdout = createBufferedWriteable();
+      await spawn("cat", [], {
+        stdin: Readable.from(["hello ", "from ", "stdin\n"]),
+        stdout,
+      });
+      assertOutput(stdout, "hello from stdin\n");
+    });
+
+    it("pipes a Readable into the child in buffered output-mode", async () => {
+      const stdout = createBufferedWriteable();
+      await spawn("sh", ["-c", "cat; exit 1"], {
+        outputMode: "buffered",
+        stdin: Readable.from(["buffered\n"]),
+        stdout,
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        assertOutput(stdout, "");
+        error.flushOutput();
+      });
+      assertOutput(stdout, "buffered\n");
+    });
+
+    it("closes stdin when asked, letting a child waiting on EOF exit", async () => {
+      const stdout = createBufferedWriteable();
+      await spawn(process.execPath, ["-e", ECHO_UNTIL_EOF_SCRIPT], {
+        stdin: "close",
+        stdout,
+      });
+      assertOutput(stdout, "EOF\n");
+    });
+
+    it("leaves stdin open by default", async () => {
+      const stdout = createBufferedWriteable();
+      const child = spawn(process.execPath, ["-e", ECHO_UNTIL_EOF_SCRIPT], {
+        stdout,
+      });
+      assert.equal(await settlesWithin(child, 500), false);
+      child.stdin.end("bye\n");
+      await child;
+      assertOutput(stdout, "bye\nEOF\n");
+    });
+
+    it("exposes stdin for writing directly", async () => {
+      const stdout = createBufferedWriteable();
+      const child = spawn("cat", [], { stdout });
+      child.stdin.write("written ");
+      child.stdin.write("directly\n");
+      child.stdin.end();
+      await child;
+      assertOutput(stdout, "written directly\n");
+    });
+
+    it("ends the child's stdin when the source ends", async () => {
+      const stdout = createBufferedWriteable();
+      const source = new PassThrough();
+      const child = spawn(process.execPath, ["-e", ECHO_UNTIL_EOF_SCRIPT], {
+        stdin: source,
+        stdout,
+      });
+      source.write("before end\n");
+      source.end();
+      await child;
+      assertOutput(stdout, "before end\nEOF\n");
+    });
+
+    it("ends the child's stdin when attaching an ended source", async () => {
+      const stdout = createBufferedWriteable();
+      const source = Readable.from([]);
+      source.resume();
+      await new Promise((resolve) => source.once("end", resolve));
+      await spawn(process.execPath, ["-e", ECHO_UNTIL_EOF_SCRIPT], {
+        stdin: source,
+        stdout,
+      });
+      assertOutput(stdout, "EOF\n");
+    });
+
+    it("detaches and attaches sources while running", async () => {
+      const stdout = createBufferedWriteable();
+      const first = new PassThrough();
+      const second = new PassThrough();
+      const child = spawn("cat", [], { stdin: first, stdout });
+
+      first.write("first\n");
+      await sleep(100);
+      child.detachStdin();
+      // Neither the source nor the child's stdin are ended by detaching
+      assert.equal(first.writableEnded, false);
+      assert.equal(child.stdin.writableEnded, false);
+      // Buffered by the paused source, until it's attached again
+      first.write("held\n");
+      await sleep(100);
+
+      child.attachStdin(second);
+      second.write("second\n");
+      await sleep(100);
+      // Attaching another source detaches the previous
+      child.attachStdin(first);
+      second.write("dropped\n");
+      first.write("first again\n");
+      await sleep(100);
+
+      // Ending a detached source doesn't end the child's stdin
+      second.end();
+      await sleep(100);
+      assert.equal(child.stdin.writableEnded, false);
+      assert.equal(await settlesWithin(child, 100), false);
+
+      first.end();
+      await child;
+      assertOutput(stdout, "first\nsecond\nheld\nfirst again\n");
+    });
+
+    it("routes a single source to whichever child is attached", async () => {
+      const source = new PassThrough();
+      const stdouts = [createBufferedWriteable(), createBufferedWriteable()];
+      const children = stdouts.map((stdout) => spawn("cat", [], { stdout }));
+
+      children[0].attachStdin(source);
+      source.write("to first\n");
+      await sleep(100);
+      children[0].detachStdin();
+      children[1].attachStdin(source);
+      source.write("to second\n");
+      await sleep(100);
+      // Both children can be attached at once
+      children[0].attachStdin(source);
+      source.write("to both\n");
+      source.end();
+      await Promise.all(children);
+      assertOutput(stdouts[0], "to first\nto both\n");
+      assertOutput(stdouts[1], "to second\nto both\n");
+      assert.equal(source.listenerCount("data"), 0);
+    });
+
+    it("detaches the source when the child exits", async () => {
+      const source = new PassThrough();
+      await spawn(process.execPath, ["-e", ""], { stdin: source });
+      assert.equal(source.listenerCount("data"), 0);
+      assert.equal(source.listenerCount("end"), 0);
+      // The source is left open and paused, as it was found
+      assert.equal(source.writableEnded, false);
+      assert.equal(source.isPaused(), true);
+      // Writing to it doesn't fail
+      source.write("after exit\n");
+    });
+
+    it("ignores writes after the child exited", async () => {
+      const child = spawn(process.execPath, ["-e", ""]);
+      await child;
+      child.stdin.write("nobody is listening\n");
+      child.attachStdin(new PassThrough());
+      await sleep(50);
+    });
+
+    it("applies backpressure from the child to the source", async () => {
+      // The child never reads from stdin, so writes eventually don't drain
+      const source = new PassThrough();
+      const child = spawn(
+        process.execPath,
+        ["-e", "setTimeout(() => {}, 30000)"],
+        {
+          stdin: source,
+        },
+      );
+      const chunk = Buffer.alloc(64 * 1024);
+      for (let i = 0; i < 64; i++) {
+        source.write(chunk);
+      }
+      await sleep(200);
+      assert.equal(source.isPaused(), true);
+      child.kill();
+      await assert.rejects(child, SpawnFailure);
+      assert.equal(source.listenerCount("data"), 0);
+    });
+
+    it("rejects an invalid stdin before spawning", () => {
+      assert.throws(
+        () =>
+          spawn("this-is-never-spawned", [], {
+            stdin: "inherit" as "pipe",
+          }),
+        TypeError,
+      );
+    });
+  });
+
   describe("hanging process", function () {
     // Spawning takes a while and the child is killed by a timeout
     this.timeout(20_000);
@@ -489,6 +703,51 @@ describe("spawn", () => {
         });
       });
     }
+
+    it("doesn't leak listeners on a source shared by concurrent children", async () => {
+      const source = new PassThrough();
+      const sourceBaseline = getListenerCounts(source);
+      const warnings: Error[] = [];
+      const captureWarning = (warning: Error) => warnings.push(warning);
+      process.on("warning", captureWarning);
+      try {
+        const stdout = createBufferedWriteable();
+        await assertListenerHygiene(async () => {
+          const children = Array.from({ length: SPAWN_COUNT }, () =>
+            spawn("cat", [], { stdin: source, stdout }),
+          );
+          source.write("x");
+          source.end();
+          await Promise.all(children);
+        });
+        // The promise settles on "exit", which may precede the last output: wait for it
+        let output = "";
+        for (let i = 0; i < 100 && output.length < SPAWN_COUNT; i++) {
+          output += stdout.drain();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(output, "x".repeat(SPAWN_COUNT));
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(warnings, []);
+        assert.deepEqual(getListenerCounts(source), sourceBaseline);
+      } finally {
+        process.off("warning", captureWarning);
+      }
+    });
+
+    it("doesn't leak listeners when spawning fails with a stdin source", async () => {
+      const source = new PassThrough();
+      const sourceBaseline = getListenerCounts(source);
+      await assertListenerHygiene(async () => {
+        await repeat(SPAWN_COUNT, () =>
+          assert.rejects(
+            spawn("this-command-does-not-exist", [], { stdin: source }),
+            /ENOENT/,
+          ),
+        );
+      });
+      assert.deepEqual(getListenerCounts(source), sourceBaseline);
+    });
 
     it("doesn't leak listeners when failures are never flushed", async () => {
       await assertListenerHygiene(async () => {
