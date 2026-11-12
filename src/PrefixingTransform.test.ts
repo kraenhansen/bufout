@@ -4,7 +4,7 @@ import { Readable, Writable } from "node:stream";
 import { createPrefixingTransform } from "./PrefixingTransform.ts";
 
 function testPrefixingTransform(
-  chunks: string[],
+  chunks: (string | Buffer)[],
   prefix: string,
   expectedOutput: string,
   done: () => void,
@@ -100,5 +100,36 @@ describe("PrefixingTransform", () => {
     const largeInput = "Line\n".repeat(10000); // 10,000 lines
     const expectedOutput = "[PREFIX] Line\n".repeat(10000);
     testPrefixingTransform([largeInput], "[PREFIX] ", expectedOutput, done);
+  });
+
+  it("should decode multi-byte characters split across chunks", function (done) {
+    const bytes = Buffer.from("æøå\n🚀 launch\n");
+    // Split into single bytes, splitting every multi-byte character
+    const chunks = [...bytes].map((byte) => Buffer.from([byte]));
+    testPrefixingTransform(
+      chunks,
+      "[PREFIX] ",
+      "[PREFIX] æøå\n[PREFIX] 🚀 launch\n",
+      done,
+    );
+  });
+
+  it("should decode a multi-byte character split at a line start", function (done) {
+    const rocket = Buffer.from("🚀");
+    testPrefixingTransform(
+      [
+        Buffer.concat([Buffer.from("a\n"), rocket.subarray(0, 2)]),
+        Buffer.concat([rocket.subarray(2), Buffer.from("\n")]),
+      ],
+      "> ",
+      "> a\n> 🚀\n",
+      done,
+    );
+  });
+
+  it("should flush an incomplete character at the end", function (done) {
+    const rocket = Buffer.from("🚀");
+    // StringDecoder emits a replacement character for the incomplete bytes
+    testPrefixingTransform([rocket.subarray(0, 2)], "> ", "> \ufffd", done);
   });
 });

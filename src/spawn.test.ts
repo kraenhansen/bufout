@@ -206,6 +206,72 @@ describe("spawn", () => {
       assertOutput("stderr", "failed\n");
     });
 
+    it("flushes only stdout", async () => {
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
+        outputMode: "buffered",
+        outputPrefix: "[prefix] ",
+        env: {
+          ...process.env,
+          CONSOLE_LOG: "starting",
+          CONSOLE_ERROR: "failed",
+          EXIT_CODE: "1",
+        },
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput("stdout");
+      });
+      assertOutput("stdout", "[prefix] starting\n");
+      assertOutput("stderr", "");
+    });
+
+    it("flushes only stderr into a custom stream", async () => {
+      const stdout = createBufferedWriteable();
+      const stderr = createBufferedWriteable();
+      await spawn(process.execPath, [INSTRUMENTED_SCRIPT_PATH], {
+        outputMode: "buffered",
+        stdout,
+        stderr,
+        env: {
+          ...process.env,
+          CONSOLE_LOG: "starting",
+          CONSOLE_ERROR: "failed",
+          EXIT_CODE: "1",
+        },
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput("stderr");
+      });
+      assertOutput(stdout, "");
+      assertOutput(stderr, "failed\n");
+      assertOutput("stdout", "");
+      assertOutput("stderr", "");
+    });
+
+    it("decodes multi-byte characters split across chunks when prefixing", async () => {
+      // Writes "æ🚀\n" one byte at a time, pausing between writes to split the chunks
+      const script = `
+        const bytes = [...Buffer.from("æ🚀\\n")];
+        (function next() {
+          if (bytes.length > 0) {
+            process.stdout.write(Buffer.from([bytes.shift()]));
+            setTimeout(next, 10);
+          } else {
+            process.exitCode = 1;
+          }
+        })();
+      `;
+      const stdout = createBufferedWriteable();
+      await spawn(process.execPath, ["-e", script], {
+        outputMode: "buffered",
+        outputPrefix: "> ",
+        stdout,
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput();
+      });
+      assertOutput(stdout, "> æ🚀\n");
+    });
+
     it("use stdout and stderr passed through options", async () => {
       const stdout = createBufferedWriteable();
       const stderr = createBufferedWriteable();
@@ -747,6 +813,45 @@ describe("spawn", () => {
         );
       });
       assert.deepEqual(getListenerCounts(source), sourceBaseline);
+    });
+
+    it("doesn't leak listeners when many concurrent spawns fail", async () => {
+      await assertListenerHygiene(async () => {
+        await Promise.all(
+          Array.from({ length: SPAWN_COUNT * 4 }, () =>
+            assert.rejects(
+              spawn("this-command-does-not-exist", [], {
+                outputMode: "buffered",
+              }),
+              /ENOENT/,
+            ),
+          ),
+        );
+      });
+    });
+
+    it("doesn't leak listeners with many concurrent long-lived children", async () => {
+      await assertListenerHygiene(async () => {
+        const baseline = {
+          SIGINT: process.listenerCount("SIGINT"),
+          exit: process.listenerCount("exit"),
+        };
+        const children = Array.from({ length: SPAWN_COUNT * 4 }, () =>
+          spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+            outputMode: "buffered",
+            maxBufferedLines: 10,
+          }),
+        );
+        // A single listener per event, regardless of the number of children
+        assert.equal(process.listenerCount("SIGINT"), baseline.SIGINT + 1);
+        assert.equal(process.listenerCount("exit"), baseline.exit + 1);
+        for (const child of children) {
+          child.kill();
+        }
+        await Promise.all(
+          children.map((child) => assert.rejects(child, SpawnFailure)),
+        );
+      });
     });
 
     it("doesn't leak listeners when failures are never flushed", async () => {
