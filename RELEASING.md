@@ -5,6 +5,10 @@ it, up to the approval that needs a human. What the pipeline assumes:
 
 - Publishing a **published GitHub release** is the only way a version reaches npm. Drafts trigger
   nothing, and there is no manual workflow dispatch.
+- [Changesets](https://github.com/changesets/changesets) decide the version. Pull requests add a file
+  to `.changeset/` (`npm run changeset`), and `npm run version-packages` consumes them all into the
+  `package.json` bump and the `CHANGELOG.md` entry. Changesets is not involved in tagging or publishing -
+  `changeset publish` is never run.
 - The version bump reaches `main` through a pull request, like every other change, and squashes into a
   single commit there like every other change.
 - The release creates the tag, targeting that squashed commit — no tag is pushed by hand. The tag is

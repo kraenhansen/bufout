@@ -64,7 +64,14 @@ const sleeper = spawn("sleep", ["10"]);
 sleeper.kill();
 ```
 
+## Contributing
+
+Changes that consumers of the package will notice need a [changeset](https://github.com/changesets/changesets):
+run `npm run changeset`, pick the bump level, describe the change, and commit the generated file in
+`.changeset/` along with your change.
+
 ## Releasing
 
-New versions are published to npm from a GitHub release, using trusted publishing (OIDC) with
+Pending changesets are turned into a version bump and a [CHANGELOG.md](./CHANGELOG.md) entry at release
+time. New versions are published to npm from a GitHub release, using trusted publishing (OIDC) with
 provenance. See [RELEASING.md](./RELEASING.md).

@@ -9,7 +9,9 @@
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "lint": "eslint",
-    "example": "node ./src/test-utils/example.ts"
+    "example": "node ./src/test-utils/example.ts",
+    "changeset": "changeset",
+    "version-packages": "changeset version && npm install --package-lock-only"
   },
   "files": [
     "dist",
@@ -36,6 +38,7 @@
   },
   "homepage": "https://github.com/kraenhansen/bufout#readme",
   "devDependencies": {
+    "@changesets/cli": "^3.0.3",
     "@eslint/js": "^9.15.0",
     "@tsconfig/node18": "18.2.4",
     "@types/mocha": "^10.0.10",
