@@ -228,6 +228,117 @@ describe("spawn", () => {
     });
   });
 
+  describe("bounded buffered output-mode", () => {
+    // Prints numbered lines alternating between stdout and stderr, then fails.
+    // Pauses between writes, as the parent reads the pipes in no particular order.
+    const ALTERNATING_SCRIPT = `
+      let i = 1;
+      function next() {
+        const stream = i % 2 === 0 ? process.stderr : process.stdout;
+        stream.write((i % 2 === 0 ? "err " : "out ") + i + "\\n");
+        if (++i <= 10) {
+          setTimeout(next, 20);
+        } else {
+          process.exitCode = 1;
+        }
+      }
+      next();
+    `;
+
+    it("keeps only the most recent lines", async () => {
+      const stdout = createBufferedWriteable();
+      const stderr = createBufferedWriteable();
+      await assert.rejects(
+        spawn(process.execPath, ["-e", ALTERNATING_SCRIPT], {
+          outputMode: "buffered",
+          maxBufferedLines: 3,
+          stdout,
+          stderr,
+        }).catch((error) => {
+          assert(error instanceof SpawnFailure);
+          error.flushOutput();
+          throw error;
+        }),
+        SpawnFailure,
+      );
+      assertOutput(stdout, "out 9\n");
+      assertOutput(stderr, "err 8\nerr 10\n");
+    });
+
+    it("preserves order across streams when flushing", async () => {
+      // A single destination for both streams reveals the interleaving
+      const both = createBufferedWriteable();
+      await spawn(process.execPath, ["-e", ALTERNATING_SCRIPT], {
+        outputMode: "buffered",
+        maxBufferedLines: 4,
+        outputPrefix: "> ",
+        stdout: both,
+        stderr: both,
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput();
+      });
+      assertOutput(both, "> out 7\n> err 8\n> out 9\n> err 10\n");
+    });
+
+    it("flushes a single stream", async () => {
+      const stdout = createBufferedWriteable();
+      const stderr = createBufferedWriteable();
+      await spawn(process.execPath, ["-e", ALTERNATING_SCRIPT], {
+        outputMode: "buffered",
+        maxBufferedLines: 4,
+        stdout,
+        stderr,
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput("stdout");
+      });
+      assertOutput(stdout, "out 7\nout 9\n");
+      assertOutput(stderr, "");
+    });
+
+    it("bounds by bytes", async () => {
+      const stdout = createBufferedWriteable();
+      const script = `
+        console.log("a".repeat(100));
+        setTimeout(() => {
+          console.log("b".repeat(10));
+          process.exitCode = 1;
+        }, 20);
+      `;
+      await spawn(process.execPath, ["-e", script], {
+        outputMode: "buffered",
+        maxBufferedBytes: 20,
+        stdout,
+      }).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput();
+      });
+      // The older line is evicted entirely
+      assertOutput(stdout, "b".repeat(10) + "\n");
+    });
+
+    it("truncates a line exceeding the byte bound", async () => {
+      const stdout = createBufferedWriteable();
+      await spawn(
+        process.execPath,
+        ["-e", "console.log('a'.repeat(100)); process.exitCode = 1;"],
+        { outputMode: "buffered", maxBufferedBytes: 20, stdout },
+      ).catch((error) => {
+        assert(error instanceof SpawnFailure);
+        error.flushOutput();
+      });
+      assertOutput(stdout, "a".repeat(19) + "\n");
+    });
+
+    it("rejects invalid bounds before spawning", () => {
+      assert.throws(
+        () => spawn("this-is-never-spawned", [], { maxBufferedLines: 0 }),
+        TypeError,
+      );
+    });
+  });
+
   describe("hanging process", function () {
     // Spawning takes a while and the child is killed by a timeout
     this.timeout(20_000);

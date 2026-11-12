@@ -61,6 +61,18 @@ export type SpawnOptions = {
    */
   outputPrefix?: string;
   /**
+   * In the "buffered" output-mode, keep only the most recent lines of output (across stdout and stderr),
+   * evicting the oldest. Useful to bound the memory used by long-lived processes.
+   * @default Infinity (unbounded)
+   */
+  maxBufferedLines?: number;
+  /**
+   * In the "buffered" output-mode, keep only the most recent bytes of output (across stdout and stderr),
+   * evicting the oldest lines.
+   * @default Infinity (unbounded)
+   */
+  maxBufferedBytes?: number;
+  /**
    * Use this when flushing output to stdout.
    */
   stdout?: Writable | typeof process.stdout;
@@ -213,10 +225,12 @@ function bufferOutput(
   stdout: Writable,
   stderr: Writable,
   prefix: string | undefined,
+  maxLines: number,
+  maxBytes: number,
 ): (stream?: "stdout" | "stderr" | "both") => void {
   const transform = createMultiBufferedTransform(
     [childStdout, childStderr] as const,
-    { end: false },
+    { end: false, maxLines, maxBytes },
   );
   const [stdoutOutput, stderrOutput] = transform.outputs;
   return (stream = "both") => {
@@ -252,6 +266,8 @@ export function spawn(
   {
     outputMode = "inherit",
     outputPrefix,
+    maxBufferedLines = Infinity,
+    maxBufferedBytes = Infinity,
     stdout = process.stdout,
     stderr = process.stderr,
     ...options
@@ -259,6 +275,16 @@ export function spawn(
 ): KillablePromise<void> {
   if (outputMode !== "inherit" && outputMode !== "buffered") {
     throw new Error(`Unexpected output mode ${outputMode as string}`);
+  }
+  for (const [name, value] of Object.entries({
+    maxBufferedLines,
+    maxBufferedBytes,
+  })) {
+    if (!(value === Infinity || (Number.isInteger(value) && value > 0))) {
+      throw new TypeError(
+        `Expected '${name}' to be a positive integer or Infinity, got ${value}`,
+      );
+    }
   }
   const child = cp.spawn(command, args, {
     ...options,
@@ -274,7 +300,15 @@ export function spawn(
   const flushOutput =
     outputMode === "inherit"
       ? inheritOutput(childStdout, childStderr, stdout, stderr, outputPrefix)
-      : bufferOutput(childStdout, childStderr, stdout, stderr, outputPrefix);
+      : bufferOutput(
+          childStdout,
+          childStderr,
+          stdout,
+          stderr,
+          outputPrefix,
+          maxBufferedLines,
+          maxBufferedBytes,
+        );
 
   const result = new Promise<void>((resolve, reject) => {
     child.once("exit", (code, signal) => {

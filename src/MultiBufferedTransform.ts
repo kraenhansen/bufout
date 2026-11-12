@@ -1,5 +1,7 @@
 import { Readable, Transform } from "node:stream";
 
+import { LineRingBuffer } from "./LineRingBuffer.ts";
+
 type MultiBufferedTransformResult<T extends Readable[]> = {
   /**
    * Flush streams into their respective outputs
@@ -26,7 +28,72 @@ export type MultiBufferedTransformOptions = {
    * @default true
    */
   end?: boolean;
+  /**
+   * Bound the buffer to the most recent lines (across all inputs), evicting the oldest.
+   * When bounded, the buffer stores lines instead of chunks: a partial line is completed
+   * by later chunks from the same input and keeps the position of its first chunk.
+   * @default Infinity (unbounded)
+   */
+  maxLines?: number;
+  /**
+   * Bound the buffer to the most recent bytes (across all inputs), evicting the oldest lines.
+   * @default Infinity (unbounded)
+   */
+  maxBytes?: number;
 };
+
+type ChunkBuffer = {
+  write(chunk: unknown, output: Transform): void;
+  /** Push and drop all chunks, skipping those not matching the filter */
+  flush(filter: (output: Transform) => boolean): void;
+  clear(): void;
+};
+
+/**
+ * Unbounded buffer of chunks, in the order they were written.
+ */
+function createChunkBuffer(): ChunkBuffer {
+  const buffer: [unknown, Transform][] = [];
+  return {
+    write(chunk, output) {
+      buffer.push([chunk, output]);
+    },
+    flush(filter) {
+      for (const [chunk, transform] of buffer.splice(0, buffer.length)) {
+        if (filter(transform)) {
+          transform.push(chunk);
+        }
+      }
+    },
+    clear() {
+      buffer.splice(0, buffer.length);
+    },
+  };
+}
+
+/**
+ * Bounded buffer of lines, in the order they started.
+ */
+function createLineBuffer(maxLines: number, maxBytes: number): ChunkBuffer {
+  const ring = new LineRingBuffer<Transform>({ maxLines, maxBytes });
+  return {
+    write(chunk, output) {
+      ring.write(chunk as Buffer | string, output);
+    },
+    flush(filter) {
+      const entries = [...ring.entries()];
+      ring.clear();
+      for (const { source, data } of entries) {
+        if (filter(source)) {
+          source.push(data);
+        }
+      }
+    },
+    clear() {
+      ring.clear();
+    },
+  };
+}
 
 /**
  * Combines multiple readable streams into a single buffer which can be flushed in order of writes across the streams.
@@ -35,21 +102,28 @@ export type MultiBufferedTransformOptions = {
  */
 export function createMultiBufferedTransform<T extends Readable[]>(
   inputs: T,
-  { end = true }: MultiBufferedTransformOptions = {},
+  {
+    end = true,
+    maxLines = Infinity,
+    maxBytes = Infinity,
+  }: MultiBufferedTransformOptions = {},
 ): MultiBufferedTransformResult<T> {
-  const buffer: [unknown, Transform][] = [];
-  const inputPerOutput = new Map<Transform, Readable>();
+  const buffer =
+    maxLines === Infinity && maxBytes === Infinity
+      ? createChunkBuffer()
+      : createLineBuffer(maxLines, maxBytes);
+  const outputPerInput = new Map<Readable, Transform>();
   return {
     flush(stream: Readable | undefined) {
-      for (const [chunk, transform] of buffer.splice(0, buffer.length)) {
-        if (stream && inputPerOutput.get(transform) !== stream) {
-          continue;
-        }
-        transform.push(chunk);
+      if (stream) {
+        const output = outputPerInput.get(stream);
+        buffer.flush((transform) => transform === output);
+      } else {
+        buffer.flush(() => true);
       }
     },
     clear() {
-      buffer.splice(0, buffer.length);
+      buffer.clear();
     },
     destroy() {
       for (const r of this.outputs) {
@@ -59,11 +133,11 @@ export function createMultiBufferedTransform<T extends Readable[]>(
     outputs: inputs.map((input) => {
       const transform = new Transform({
         write(chunk: Buffer, _, callback) {
-          buffer.push([chunk, this]);
+          buffer.write(chunk, this);
           callback();
         },
       });
-      inputPerOutput.set(transform, input);
+      outputPerInput.set(input, transform);
       return input.pipe(transform, { end }) as Readable;
     }) as T,
   };
